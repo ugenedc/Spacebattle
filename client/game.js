@@ -31,7 +31,7 @@ class MainScene extends Phaser.Scene {
         this.asteroidsGroup = null; // Phaser group for asteroid sprites
         this.powerupsGroup = null; // Phaser group for powerups
         this.playerShip = null;
-        this.score = 0;
+        this.kills = 0; // Use kills instead of score locally
         this.playerTexts = new Map();
         this.healthBars = new Map();
         this.weaponType = 'normal';
@@ -54,6 +54,7 @@ class MainScene extends Phaser.Scene {
         this.playerPings = new Map(); // Store last known ping for each player
         this.pingInterval = null; // Reference to the ping interval timer
         this.pingText = null; // Text object for displaying ping
+        this.leaderboardText = null; // Text object for leaderboard
     }
 
     preload() {
@@ -71,8 +72,8 @@ class MainScene extends Phaser.Scene {
             this.createGridTexture(100, 0x008800); // Grid size 100, dark green
 
             // Create Power-up Textures
-            this.createPowerupTexture('health', 0xff0000); // Red cross
-            this.createPowerupTexture('speed', 0x0000ff); // Blue arrow/chevron
+            // this.createPowerupTexture('health', 0xff0000); // Red cross
+            // this.createPowerupTexture('speed', 0x0000ff); // Blue arrow/chevron
 
             Logger.info('Preload setup completed');
         } catch (error) {
@@ -204,36 +205,6 @@ class MainScene extends Phaser.Scene {
         graphics.destroy();
     }
 
-    createPowerupTexture(type, color) {
-        const graphics = this.add.graphics();
-        const size = 24; // Powerup texture size
-        graphics.fillStyle(color, 1);
-        graphics.lineStyle(2, 0xffffff, 0.8); // White border
-
-        if (type === 'health') {
-            // Draw a cross
-            const barWidth = size * 0.6;
-            const barHeight = size * 0.2;
-            graphics.fillRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
-            graphics.fillRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
-            graphics.strokeRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
-            graphics.strokeRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
-        } else if (type === 'speed') {
-            // Draw a simple chevron/arrow shape
-            graphics.beginPath();
-            graphics.moveTo(size * 0.2, size * 0.8);
-            graphics.lineTo(size * 0.5, size * 0.2);
-            graphics.lineTo(size * 0.8, size * 0.8);
-            graphics.lineTo(size * 0.5, size * 0.5); // Point inside
-            graphics.closePath();
-            graphics.fillPath();
-            graphics.strokePath();
-        }
-
-        graphics.generateTexture(`powerup_${type}`, size, size);
-        graphics.destroy();
-    }
-
     create() {
         try {
             Logger.info('Starting scene creation...');
@@ -362,7 +333,12 @@ class MainScene extends Phaser.Scene {
             }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
 
             // Create Leaderboard display (Top-Right)
-            this.createLeaderboard();
+            this.leaderboardText = this.add.text(this.cameras.main.width - 16, 16, 'Leaderboard:', {
+                fontSize: '18px',
+                fill: '#ffffffaa', // Slightly transparent white
+                align: 'right',
+                lineSpacing: 4
+            }).setOrigin(1, 0).setScrollFactor(0).setDepth(100);
             Logger.debug('Leaderboard created');
 
             // Add collision detection
@@ -428,6 +404,15 @@ class MainScene extends Phaser.Scene {
                         if (this.playerShip) this.playerShip.clearTint(); // Remove tint
                     });
                 }
+            });
+
+            // Listen for kill updates for the local player
+            socket.on('killsUpdate', (data) => {
+                if (data.playerId === socket.id) {
+                    this.kills = data.kills;
+                    this.updateKillsDisplay();
+                }
+                // Leaderboard will be updated via gameUpdate
             });
 
             this.isInitialized = true;
@@ -517,8 +502,19 @@ class MainScene extends Phaser.Scene {
             socket.on('playerLeft', (playerId) => {
                 const player = this.playersMap.get(playerId);
                 if (player) {
-                    player.sprite.destroy();
+                    // Destroy sprite
+                    if(player.sprite) player.sprite.destroy();
+                    
+                    // Destroy associated UI elements
+                    const nameText = this.playerTexts.get(playerId);
+                    const healthBar = this.healthBars.get(playerId);
+                    if (nameText) nameText.destroy();
+                    if (healthBar) healthBar.destroy();
+
+                    // Clean up maps
                     this.playersMap.delete(playerId);
+                    this.playerTexts.delete(playerId);
+                    this.healthBars.delete(playerId);
                     this.playerInterpolationTargets.delete(playerId); // Clean up target data
                 }
             });
@@ -625,13 +621,6 @@ class MainScene extends Phaser.Scene {
                 }
             });
 
-            socket.on('scoreUpdate', (data) => {
-                if (data.playerId === socket.id) {
-                    this.score = data.score;
-                    this.updateScoreBoard();
-                }
-            });
-
             socket.on('gameUpdate', (state) => {
                 const receivedAsteroidIds = new Set(); // Keep track of asteroids received in this update
 
@@ -684,6 +673,11 @@ class MainScene extends Phaser.Scene {
                         this.asteroidsMap.delete(asteroidId);
                     }
                 });
+
+                // Update Leaderboard with data from gameUpdate
+                if (state.leaderboard) {
+                    this.updateLeaderboard(state.leaderboard);
+                }
             });
 
             Logger.debug('Socket events setup completed');
@@ -775,15 +769,14 @@ class MainScene extends Phaser.Scene {
         ship.body.setMaxVelocity(300);
         ship.body.setMass(1);
         
-        // Set precise polygon hitbox
-        const triangleVertices = '0 -12 -12 12 12 12'; // Vertices relative to center (0,0)
-        ship.body.setPolygon(
-            { vertices: triangleVertices }, 
-             // Optional: Adjust center if needed, but default (0,0) is correct for origin 0.5
-        );
-        // Ensure body size matches polygon bounds (Phaser might do this automatically)
-        // ship.body.setSize(24, 24); // Example: If needed, set manually 
-
+        // Set a tighter rectangular hitbox (approximate triangle)
+        const bodyWidth = 20;
+        const bodyHeight = 20;
+        const offsetX = (ship.width - bodyWidth) / 2; // Center the hitbox
+        const offsetY = (ship.height - bodyHeight) / 2; 
+        ship.body.setSize(bodyWidth, bodyHeight);
+        ship.body.setOffset(offsetX, offsetY);
+        
         this.playersGroup.add(ship);
         this.playersMap.set(playerInfo.id, {
             sprite: ship,
@@ -982,9 +975,9 @@ class MainScene extends Phaser.Scene {
         });
     }
 
-    updateScoreBoard() {
-        if (this.scoreText) {
-            this.scoreText.setText(`Score: ${this.score}`);
+    updateKillsDisplay() {
+        if (this.scoreText) { // Reuse the scoreText object
+            this.scoreText.setText(`Kills: ${this.kills}`);
         }
     }
 
@@ -1027,22 +1020,15 @@ class MainScene extends Phaser.Scene {
         }
     }
 
-    updateLeaderboard() {
-        const scores = Array.from(this.playersMap.values())
-            .map(player => ({
-                name: player.info.name,
-                score: player.info.score || 0
-            }))
-            .sort((a, b) => b.score - a.score);
+    updateLeaderboard(leaderboardData) {
+        if (!this.leaderboardText) return;
 
-        const leaderboardText = scores
-            .slice(0, 5)
-            .map((entry, index) => `${index + 1}. ${entry.name}: ${entry.score}`)
-            .join('\n');
+        let leaderboardString = 'Leaderboard:\n';
+        leaderboardData.forEach((entry, index) => {
+            leaderboardString += `${index + 1}. ${entry.name}: ${entry.kills}\n`;
+        });
 
-        if (this.leaderboardText) {
-            this.leaderboardText.setText(leaderboardText);
-        }
+        this.leaderboardText.setText(leaderboardString.trim());
     }
 
     createExplosion(x, y, tint = 0x00ff00, scaleMultiplier = 1) {
@@ -1330,14 +1316,54 @@ class MainScene extends Phaser.Scene {
     addPowerup(powerupInfo) {
         if (this.powerupsMap.has(powerupInfo.id)) return; // Don't add duplicates
 
-        const textureName = `powerup_${powerupInfo.type}`;
-        const powerupSprite = this.physics.add.sprite(powerupInfo.x, powerupInfo.y, textureName);
-        
-        if (!powerupSprite.texture.exists) { // Check if texture loaded correctly
-             Logger.warn(`Texture not found for powerup type: ${powerupInfo.type}`);
-             powerupSprite.destroy(); // Clean up if texture missing
-             return;
+        const size = 24;
+        const type = powerupInfo.type;
+        let color = 0xffffff; // Default white
+        if (type === 'health') color = 0xff0000; // Red
+        if (type === 'speed') color = 0x0000ff; // Blue
+
+        // Create a graphics object to draw the texture
+        const graphics = this.add.graphics();
+        graphics.fillStyle(color, 1);
+        graphics.lineStyle(2, 0xffffff, 0.8); // White border
+
+        // Draw shape based on type
+        if (type === 'health') {
+            const barWidth = size * 0.6;
+            const barHeight = size * 0.2;
+            graphics.fillRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
+            graphics.fillRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
+            graphics.strokeRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
+            graphics.strokeRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
+        } else if (type === 'speed') {
+            graphics.beginPath();
+            graphics.moveTo(size * 0.2, size * 0.8);
+            graphics.lineTo(size * 0.5, size * 0.2);
+            graphics.lineTo(size * 0.8, size * 0.8);
+            graphics.lineTo(size * 0.5, size * 0.5);
+            graphics.closePath();
+            graphics.fillPath();
+            graphics.strokePath();
+        } else {
+            // Default circle if unknown type
+             graphics.fillCircle(size / 2, size / 2, size * 0.4);
+             graphics.strokeCircle(size / 2, size / 2, size * 0.4);
         }
+
+        // Generate a unique texture key for this specific powerup instance
+        const textureKey = `powerup_${type}_${powerupInfo.id}`;
+        graphics.generateTexture(textureKey, size, size);
+        graphics.destroy(); // Clean up graphics object
+
+        // Create the sprite using the generated texture
+        const powerupSprite = this.physics.add.sprite(powerupInfo.x, powerupInfo.y, textureKey);
+        
+        // Cleanup the generated texture when the sprite is destroyed
+        powerupSprite.on('destroy', () => {
+            if (this.textures.exists(textureKey)) {
+                this.textures.remove(textureKey);
+            }
+        });
         
         this.powerupsGroup.add(powerupSprite);
         powerupSprite.setData('powerupId', powerupInfo.id); // Store ID for collision
