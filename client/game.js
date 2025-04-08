@@ -582,7 +582,7 @@ class MainScene extends Phaser.Scene {
                     receivedAsteroidIds.add(asteroidInfo.id); // Mark this asteroid ID as received
                     const asteroid = this.asteroidsMap.get(asteroidInfo.id);
                     if (asteroid) {
-                        // Update existing asteroid
+                        // ALWAYS Update existing asteroid position and rotation from server
                         asteroid.sprite.setPosition(asteroidInfo.x, asteroidInfo.y);
                         asteroid.sprite.setRotation(asteroidInfo.rotation);
                     } else {
@@ -771,28 +771,13 @@ class MainScene extends Phaser.Scene {
         asteroid.body.setCircle(physicsRadius);
         asteroid.body.setOffset(48 - physicsRadius, 48 - physicsRadius); // Center the physics body
         
-        // Set velocity
-        asteroid.body.setVelocity(asteroidInfo.velocityX || 0, asteroidInfo.velocityY || 0);
-        
-        // Enable collisions but no world bounds
-        asteroid.body.setCollideWorldBounds(false);
-        asteroid.body.setBounce(1, 1);
-        
-        // Add to group and map
+        // Add sprite to the group (still needed for bullet collision checks)
         this.asteroidsGroup.add(asteroid);
+        
+        // Add to map (still needed for lookup)
         this.asteroidsMap.set(asteroidInfo.id, {
             sprite: asteroid,
             info: asteroidInfo
-        });
-
-        // Create explosion emitter
-        asteroid.explosionEmitter = this.add.particles(0, 0, 'bullet', {
-            speed: { min: 30, max: 80 },
-            scale: { start: 0.2, end: 0 },
-            blendMode: 'ADD',
-            lifespan: 400,
-            tint: 0x00ff00,
-            on: false
         });
     }
 
@@ -1229,19 +1214,16 @@ class MainScene extends Phaser.Scene {
                 });
             }
 
-            // Update asteroids (rotation only, position is set by server gameUpdate)
-            this.asteroidsMap.forEach((asteroidObj) => {
-                const asteroid = asteroidObj.sprite;
-                if (asteroid) {
-                    // Update rotation
-                    if (asteroid.rotationSpeed) {
-                        asteroid.rotation += asteroid.rotationSpeed;
-                    }
-                    
-                    // Wrap around screen edges
-                    this.wrapObject(asteroid);
-                }
-            });
+            // Update asteroids (REMOVED local rotation, position/rotation set by server gameUpdate)
+            // this.asteroidsMap.forEach((asteroidObj) => {
+            //     const asteroid = asteroidObj.sprite;
+            //     if (asteroid) {
+            //         // Update rotation
+            //         if (asteroid.rotationSpeed) {
+            //             asteroid.rotation += asteroid.rotationSpeed;
+            //         }
+            //     }
+            // });
 
         } catch (error) {
             Logger.error('Error in update loop:', error);
