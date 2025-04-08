@@ -281,50 +281,64 @@ io.on('connection', (socket) => {
             
             hitPlayer.health -= damage;
             
-            if (hitPlayer.health <= 0) {
+            if (hitPlayer.health <= 0 && hitPlayer.isAlive) { // Only trigger death once
                 hitPlayer.isAlive = false;
-                io.emit('playerKilled', {
-                    id: hitPlayer.id,
-                    killerId: data.shooterId
+                // Emit player killed event TO ALL clients
+                io.emit('playerKilled', { 
+                    playerId: hitPlayer.id, 
+                    killerId: data.shooterId 
                 });
 
-                // Update killer's score
-                const killer = players.get(data.shooterId);
-                if (killer) {
-                    killer.score += 100;
-                    io.emit('scoreUpdate', {
-                        playerId: killer.id,
-                        score: killer.score
-                    });
+                // Update killer's score (if not self-kill)
+                if (data.shooterId !== hitPlayer.id) {
+                    const killer = players.get(data.shooterId);
+                    if (killer) {
+                        killer.score += 100;
+                        io.emit('scoreUpdate', {
+                            playerId: killer.id,
+                            score: killer.score
+                        });
+                    }
                 }
 
                 // Respawn player after delay
                 setTimeout(() => {
-                    if (players.has(hitPlayer.id)) {
+                    // Check if player still exists in the map (didn't disconnect)
+                    if (players.has(hitPlayer.id)) { 
                         hitPlayer.health = PLAYER_HEALTH;
                         hitPlayer.isAlive = true;
-                        hitPlayer.x = Math.random() * GAME_WIDTH;
+                        hitPlayer.x = Math.random() * GAME_WIDTH; // New random position
                         hitPlayer.y = Math.random() * GAME_HEIGHT;
-                        io.emit('playerRespawned', hitPlayer);
+                        hitPlayer.rotation = 0; // Reset rotation
+                        hitPlayer.velocityX = 0;
+                        hitPlayer.velocityY = 0;
+                        // Emit respawn event TO ALL clients
+                        io.emit('playerRespawned', hitPlayer); 
                     }
                 }, RESPAWN_TIME);
+            } else if (hitPlayer.isAlive) { // Only update health if still alive
+                // Send health update only (not needed if killed)
+                io.emit('playerHealthUpdate', { 
+                    id: hitPlayer.id, 
+                    health: hitPlayer.health 
+                });
             }
-
-            io.emit('playerHealthUpdate', {
-                id: hitPlayer.id,
-                health: hitPlayer.health
-            });
         }
     });
 
-    // Handle player movement
-    socket.on('playerMove', (moveData) => {
+    // Handle player movement (listen for 'playerMovement' from client)
+    socket.on('playerMovement', (moveData) => {
         const player = players.get(socket.id);
         if (player && player.isAlive) {
+            // Update player state on the server
+            player.x = moveData.x;
+            player.y = moveData.y;
             player.rotation = moveData.rotation;
             player.velocityX = moveData.velocityX;
             player.velocityY = moveData.velocityY;
-            io.emit('playerMoved', player);
+            
+            // Broadcast the updated player state to other clients
+            socket.broadcast.emit('playerMoved', player);
         }
     });
 

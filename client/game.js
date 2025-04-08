@@ -429,16 +429,57 @@ class MainScene extends Phaser.Scene {
                 }
             });
 
-            socket.on('playerDied', (data) => {
+            socket.on('playerKilled', (data) => {
                 const player = this.playersMap.get(data.playerId);
                 if (player) {
                     // Create a large explosion effect
                     this.createExplosion(player.sprite.x, player.sprite.y);
                     
+                    // Make the ship sprite inactive/invisible
+                    player.sprite.setActive(false).setVisible(false);
+                    player.info.isAlive = false; // Update local state
+
+                    // Remove associated text/healthbar
+                    const nameText = this.playerTexts.get(data.playerId);
+                    const healthBar = this.healthBars.get(data.playerId);
+                    if (nameText) nameText.destroy();
+                    if (healthBar) healthBar.destroy();
+                    this.playerTexts.delete(data.playerId);
+                    this.healthBars.delete(data.playerId);
+
                     // If this is the local player, show respawn message
                     if (data.playerId === socket.id) {
-                        this.handlePlayerDeath();
+                        this.handleLocalPlayerDeath();
                     }
+                }
+            });
+
+            socket.on('playerRespawned', (playerInfo) => {
+                const player = this.playersMap.get(playerInfo.id);
+                if (player) {
+                    // Reactivate/show the sprite and update position/state
+                    player.sprite.setActive(true).setVisible(true);
+                    player.sprite.setPosition(playerInfo.x, playerInfo.y);
+                    player.sprite.setRotation(playerInfo.rotation);
+                    player.sprite.body.setVelocity(0, 0); // Reset velocity
+                    player.info = playerInfo; // Update local info object
+
+                    // Re-add name text and health bar
+                    const nameText = this.add.text(playerInfo.x, playerInfo.y - 30, playerInfo.name, {
+                        fontSize: '16px',
+                        fill: '#fff',
+                        backgroundColor: '#00000080',
+                        padding: { x: 4, y: 2 }
+                    }).setOrigin(0.5);
+                    this.playerTexts.set(playerInfo.id, nameText);
+
+                    const healthBar = this.add.graphics();
+                    this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
+                    this.healthBars.set(playerInfo.id, healthBar);
+
+                } else {
+                     // If player wasn't in map (e.g., joined while someone was dead), add them now
+                     this.addPlayer(playerInfo);
                 }
             });
 
@@ -902,7 +943,7 @@ class MainScene extends Phaser.Scene {
         });
     }
 
-    handlePlayerDeath() {
+    handleLocalPlayerDeath() {
         // Create a respawn message
         const respawnText = this.add.text(
             this.cameras.main.centerX,
