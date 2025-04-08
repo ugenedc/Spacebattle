@@ -1327,27 +1327,37 @@ class MainScene extends Phaser.Scene {
         graphics.fillStyle(color, 1);
         graphics.lineStyle(2, 0xffffff, 0.8); // White border
 
-        // Draw shape based on type
+        // Draw shape based on type using polygons
+        let points = [];
+        const halfSize = size / 2;
+        const pointSize = size * 0.4; // Size of the polygon points relative to center
+
         if (type === 'health') {
-            const barWidth = size * 0.6;
-            const barHeight = size * 0.2;
-            graphics.fillRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
-            graphics.fillRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
-            graphics.strokeRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
-            graphics.strokeRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
+            // Downward pointing triangle
+            points = [
+                new Phaser.Geom.Point(0, pointSize),            // Bottom point
+                new Phaser.Geom.Point(-pointSize, -pointSize),  // Top-left
+                new Phaser.Geom.Point(pointSize, -pointSize)   // Top-right
+            ];
+            // Offset points to be relative to top-left (0,0) for fillPoints
+            points = points.map(p => new Phaser.Geom.Point(p.x + halfSize, p.y + halfSize));
+             graphics.fillPoints(points, true); // Fill the polygon
+             graphics.strokePoints(points, true); // Stroke the border
         } else if (type === 'speed') {
-            graphics.beginPath();
-            graphics.moveTo(size * 0.2, size * 0.8);
-            graphics.lineTo(size * 0.5, size * 0.2);
-            graphics.lineTo(size * 0.8, size * 0.8);
-            graphics.lineTo(size * 0.5, size * 0.5);
-            graphics.closePath();
-            graphics.fillPath();
-            graphics.strokePath();
+            // Upward pointing triangle
+             points = [
+                new Phaser.Geom.Point(0, -pointSize),           // Top point
+                new Phaser.Geom.Point(-pointSize, pointSize),  // Bottom-left
+                new Phaser.Geom.Point(pointSize, pointSize)   // Bottom-right
+            ];
+             // Offset points to be relative to top-left (0,0) for fillPoints
+            points = points.map(p => new Phaser.Geom.Point(p.x + halfSize, p.y + halfSize));
+            graphics.fillPoints(points, true); // Fill the polygon
+            graphics.strokePoints(points, true); // Stroke the border
         } else {
             // Default circle if unknown type
-             graphics.fillCircle(size / 2, size / 2, size * 0.4);
-             graphics.strokeCircle(size / 2, size / 2, size * 0.4);
+             graphics.fillCircle(halfSize, halfSize, size * 0.4);
+             graphics.strokeCircle(halfSize, halfSize, size * 0.4);
         }
 
         // Generate a unique texture key for this specific powerup instance
