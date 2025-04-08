@@ -50,6 +50,10 @@ class MainScene extends Phaser.Scene {
         this.speedBoostActive = false; // Flag for speed boost
         this.speedBoostMultiplier = 1.5; // How much faster to go
         this.powerupsMap = new Map(); // For tracking powerup data
+        this.pingStartTime = 0; // For tracking ping RTT
+        this.playerPings = new Map(); // Store last known ping for each player
+        this.pingInterval = null; // Reference to the ping interval timer
+        this.pingText = null; // Text object for displaying ping
     }
 
     preload() {
@@ -345,12 +349,21 @@ class MainScene extends Phaser.Scene {
             this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
             Logger.debug('Input controls initialized');
 
-            // Create score display
-            this.scoreText = this.add.text(16, 16, 'Score: 0', {
-                fontSize: '32px',
-                fill: '#fff'
-            }).setScrollFactor(0);
-            Logger.debug('Score display created');
+            // Create score display (Top-Left)
+            this.scoreText = this.add.text(16, 16, 'Kills: 0', { 
+                fontSize: '24px', 
+                fill: '#fff' 
+            }).setScrollFactor(0).setDepth(100);
+
+            // Create Ping display (Top-Center)
+            this.pingText = this.add.text(this.cameras.main.width / 2, 16, 'Ping: --ms', {
+                 fontSize: '20px',
+                 fill: '#cccccc'
+            }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
+
+            // Create Leaderboard display (Top-Right)
+            this.createLeaderboard();
+            Logger.debug('Leaderboard created');
 
             // Add collision detection
             this.physics.add.collider(this.bulletsGroup, this.asteroidsGroup, this.handleAsteroidHit, null, this);
@@ -376,17 +389,22 @@ class MainScene extends Phaser.Scene {
                 Logger.error('Error setting up sound system:', error);
             }
 
-            // Create leaderboard
-            this.createLeaderboard();
-            Logger.debug('Leaderboard created');
+            // Start sending pings periodically
+            this.startPingMeasurement(); 
 
-            // Add player-player collision
-            this.physics.add.collider(this.playersGroup, this.playersGroup);
+            // Listen for pong response
+            socket.on('serverPong', () => {
+                const latency = Date.now() - this.pingStartTime;
+                this.playerPings.set(socket.id, latency); // Store our own ping
+                this.updatePingDisplay(latency); // Update UI immediately
+                // Send our ping to the server so others can see it
+                socket.emit('playerPingUpdate', { ping: latency });
+            });
 
-            // Make sure the grid updates its position with the camera
-            this.cameras.main.on('scroll', () => {
-                // This might not be strictly necessary if scrollFactor is 1, but can help ensure alignment
-                 this.grid.setTilePosition(this.cameras.main.scrollX, this.cameras.main.scrollY);
+            // Listen for ping updates from other players
+            socket.on('otherPlayerPingUpdate', (data) => {
+                this.playerPings.set(data.playerId, data.ping);
+                // We could update the leaderboard here if it shows pings
             });
 
             socket.on('powerupSpawned', (powerupInfo) => {
@@ -757,6 +775,15 @@ class MainScene extends Phaser.Scene {
         ship.body.setMaxVelocity(300);
         ship.body.setMass(1);
         
+        // Set precise polygon hitbox
+        const triangleVertices = '0 -12 -12 12 12 12'; // Vertices relative to center (0,0)
+        ship.body.setPolygon(
+            { vertices: triangleVertices }, 
+             // Optional: Adjust center if needed, but default (0,0) is correct for origin 0.5
+        );
+        // Ensure body size matches polygon bounds (Phaser might do this automatically)
+        // ship.body.setSize(24, 24); // Example: If needed, set manually 
+
         this.playersGroup.add(ship);
         this.playersMap.set(playerInfo.id, {
             sprite: ship,
@@ -1340,6 +1367,36 @@ class MainScene extends Phaser.Scene {
                 // this.sounds.powerup.play();
             }
         } 
+    }
+
+    startPingMeasurement() {
+        // Clear existing interval if any
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+        }
+        // Send a ping every 2 seconds
+        this.pingInterval = setInterval(() => {
+            this.pingStartTime = Date.now();
+            socket.emit('clientPing');
+        }, 2000);
+    }
+
+    updatePingDisplay(ping) {
+        if (this.pingText) {
+            this.pingText.setText(`Ping: ${ping}ms`);
+        }
+    }
+
+    stopPingMeasurement() {
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
+    }
+
+    // Call stopPingMeasurement when scene shuts down or player disconnects
+    shutdown() { // Phaser scene lifecycle method
+        this.stopPingMeasurement();
     }
 }
 

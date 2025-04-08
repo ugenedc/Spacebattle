@@ -58,6 +58,7 @@ const GAME_HEIGHT = 1500;
 const players = new Map();
 const asteroids = new Map();
 const powerups = new Map();
+const playerLastUpdateTime = new Map(); // Track last update time for inactivity
 let asteroidId = 0;
 let powerupId = 0;
 
@@ -68,6 +69,8 @@ const MAX_ASTEROIDS = 35; // Increased further from 25
 const MAX_POWERUPS = 5;
 const ASTEROID_SPAWN_INTERVAL = 3000; // Decreased further from 4000 (3 seconds)
 const POWERUP_SPAWN_INTERVAL = 10000; // Spawn powerups more often (10 seconds)
+const PLAYER_INACTIVITY_TIMEOUT = 30000; // 30 seconds of inactivity
+const INACTIVITY_CHECK_INTERVAL = 10000; // Check every 10 seconds
 
 // Power-up types
 const POWERUP_TYPES = ['health', 'speed']; // Add 'speed' type
@@ -216,6 +219,7 @@ io.on('connection', (socket) => {
                 isAlive: true
             };
             players.set(socket.id, player);
+            playerLastUpdateTime.set(socket.id, Date.now()); // Set initial update time
             logger.info(`Player ${player.name} (${socket.id}) joined the game`);
 
             // Send current game state to new player
@@ -237,6 +241,7 @@ io.on('connection', (socket) => {
         const player = players.get(socket.id);
 
         if (powerup && player && player.isAlive) {
+            playerLastUpdateTime.set(socket.id, Date.now()); // Update time on powerup collect
             logger.debug(`Player ${player.name} collected powerup ${powerupId} of type ${powerup.type}`);
             // Remove powerup from server state
             powerups.delete(powerupId);
@@ -262,6 +267,18 @@ io.on('connection', (socket) => {
                     break;
             }
         }
+    });
+
+    // Handle ping requests
+    socket.on('clientPing', () => {
+        socket.emit('serverPong'); // Simply acknowledge the ping
+    });
+
+    // Listen for ping updates from a client and broadcast to others
+    socket.on('playerPingUpdate', (data) => {
+        // Add the player's ID to the data before broadcasting
+        const updateData = { playerId: socket.id, ping: data.ping };
+        socket.broadcast.emit('otherPlayerPingUpdate', updateData);
     });
 
     // Handle player hit with different weapon types
@@ -360,6 +377,7 @@ io.on('connection', (socket) => {
     socket.on('playerMovement', (moveData) => {
         const player = players.get(socket.id);
         if (player && player.isAlive) {
+            playerLastUpdateTime.set(socket.id, Date.now()); // Update time on movement
             // Update player state on the server
             // Clamp position to game bounds
             const halfShipWidth = 12; // Approx half width based on texture size
@@ -378,6 +396,7 @@ io.on('connection', (socket) => {
     socket.on('playerShoot', (shootData) => {
         const player = players.get(socket.id);
         if (player && player.isAlive) {
+            playerLastUpdateTime.set(socket.id, Date.now()); // Update time on shoot
             // Use socket.broadcast.emit to send to everyone EXCEPT the sender
             socket.broadcast.emit('bulletFired', {
                 playerId: socket.id,
@@ -403,6 +422,7 @@ io.on('connection', (socket) => {
             logger.info(`Player ${socket.id} disconnected`);
             // Remove player from server state
             players.delete(socket.id);
+            playerLastUpdateTime.delete(socket.id); // Clean up last update time
             // Notify all other clients that this player left
             io.emit('playerLeft', socket.id); 
         } catch (error) {
@@ -455,3 +475,19 @@ setInterval(() => {
         logger.debug('New large asteroid spawned from edge');
     }
 }, ASTEROID_SPAWN_INTERVAL);
+
+// Inactivity check interval
+setInterval(() => {
+    const now = Date.now();
+    playerLastUpdateTime.forEach((lastTime, playerId) => {
+        if (now - lastTime > PLAYER_INACTIVITY_TIMEOUT) {
+            const playerSocket = io.sockets.sockets.get(playerId);
+            if (playerSocket) {
+                logger.warn(`Disconnecting player ${playerId} due to inactivity.`);
+                playerSocket.disconnect(true); // Force disconnect
+                // The disconnect handler above will clean up players map etc.
+                playerLastUpdateTime.delete(playerId); // Remove immediately after disconnect call
+            }
+        }
+    });
+}, INACTIVITY_CHECK_INTERVAL);
