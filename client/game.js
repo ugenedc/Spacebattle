@@ -524,10 +524,7 @@ class MainScene extends Phaser.Scene {
                     this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
                     this.healthBars.set(playerInfo.id, healthBar);
 
-                } else {
-                     // If player wasn't in map (e.g., joined while someone was dead), add them now
-                     this.addPlayer(playerInfo);
-                }
+                } 
             });
 
             socket.on('bulletFired', (bulletInfo) => {
@@ -613,33 +610,75 @@ class MainScene extends Phaser.Scene {
     }
 
     handleGameState(state) {
-        try {
-            state.players.forEach(playerInfo => {
-                if (playerInfo.id === socket.id) {
-                    if (!this.playerShip) {
-                        Logger.debug(`Creating player ship for ${playerInfo.name}`);
-                        this.addPlayer(playerInfo);
-                    }
-                } else {
-                    if (!this.playersMap.has(playerInfo.id)) {
-                        Logger.debug(`Adding other player: ${playerInfo.name}`);
-                        this.addPlayer(playerInfo);
-                    }
+        Logger.debug('Processing initial game state');
+        
+        // Synchronize players
+        const receivedPlayerIds = new Set();
+        state.players.forEach(playerInfo => {
+            receivedPlayerIds.add(playerInfo.id);
+            const existingPlayer = this.playersMap.get(playerInfo.id);
+            if (existingPlayer) {
+                // Update existing player state (position, rotation, health etc.)
+                existingPlayer.sprite.setPosition(playerInfo.x, playerInfo.y);
+                existingPlayer.sprite.setRotation(playerInfo.rotation);
+                existingPlayer.info = playerInfo; // Update info object
+                // Update health bar if needed
+                const healthBar = this.healthBars.get(playerInfo.id);
+                if (healthBar) {
+                    this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
                 }
-            });
+            } else {
+                // Add new player using the safer addPlayer function
+                this.addPlayer(playerInfo);
+            }
+        });
 
-            state.asteroids.forEach(asteroidInfo => {
-                if (!this.asteroidsMap.has(asteroidInfo.id)) {
-                    Logger.debug(`Adding asteroid: ${asteroidInfo.id}`);
-                    this.addAsteroid(asteroidInfo);
-                }
-            });
-        } catch (error) {
-            Logger.error('Error handling game state:', error);
-        }
+        // Remove players that exist locally but weren't in the initial state
+        this.playersMap.forEach((playerData, playerId) => {
+            if (!receivedPlayerIds.has(playerId)) {
+                if (playerData.sprite) playerData.sprite.destroy();
+                const nameText = this.playerTexts.get(playerId);
+                const healthBar = this.healthBars.get(playerId);
+                if (nameText) nameText.destroy();
+                if (healthBar) healthBar.destroy();
+                this.playersMap.delete(playerId);
+                this.playerTexts.delete(playerId);
+                this.healthBars.delete(playerId);
+                this.playerInterpolationTargets.delete(playerId);
+            }
+        });
+
+        // Synchronize asteroids (similar logic)
+        const receivedAsteroidIds = new Set();
+        state.asteroids.forEach(asteroidInfo => {
+            receivedAsteroidIds.add(asteroidInfo.id);
+            if (!this.asteroidsMap.has(asteroidInfo.id)) {
+                this.addAsteroid(asteroidInfo);
+            }
+            // Position updates handled by gameUpdate
+        });
+        this.asteroidsMap.forEach((asteroidData, asteroidId) => {
+            if (!receivedAsteroidIds.has(asteroidId)) {
+                if (asteroidData.sprite) asteroidData.sprite.destroy();
+                this.asteroidsMap.delete(asteroidId);
+            }
+        });
+
+        this.isInitialized = true;
+        Logger.debug('Game state initialized');
     }
 
     addPlayer(playerInfo) {
+        // Prevent adding duplicate players
+        if (this.playersMap.has(playerInfo.id)) {
+            Logger.warn(`Attempted to add existing player: ${playerInfo.name} (${playerInfo.id})`);
+            // Optionally update position/rotation here if needed, but respawn handles it better
+            const existingPlayer = this.playersMap.get(playerInfo.id);
+            existingPlayer.sprite.setPosition(playerInfo.x, playerInfo.y);
+            existingPlayer.sprite.setRotation(playerInfo.rotation);
+            return; 
+        }
+
         Logger.debug(`Adding player: ${playerInfo.name}`);
         const ship = this.add.sprite(playerInfo.x, playerInfo.y, 'ship');
         ship.setRotation(playerInfo.rotation);
