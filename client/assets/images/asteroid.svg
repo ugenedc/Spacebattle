@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+    <path d="M32 4 C40 4, 48 8, 52 16 C56 24, 56 32, 52 40 C48 48, 40 52, 32 52 C24 52, 16 48, 12 40 C8 32, 8 24, 12 16 C16 8, 24 4, 32 4 Z" fill="gray" stroke="white" stroke-width="1"/>
+</svg> 
