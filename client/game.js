@@ -29,6 +29,7 @@ class MainScene extends Phaser.Scene {
         this.bulletsGroup = null; // Phaser group for bullets
         this.playersGroup = null; // Phaser group for player sprites
         this.asteroidsGroup = null; // Phaser group for asteroid sprites
+        this.powerupsGroup = null; // Phaser group for powerups
         this.playerShip = null;
         this.score = 0;
         this.playerTexts = new Map();
@@ -46,6 +47,9 @@ class MainScene extends Phaser.Scene {
         this.boundaryRect = null; // Add this to track the boundary rectangle
         this.lastShotTime = 0; // Track the time of the last shot
         this.shootCooldown = 300; // Cooldown in milliseconds (e.g., 300ms)
+        this.speedBoostActive = false; // Flag for speed boost
+        this.speedBoostMultiplier = 1.5; // How much faster to go
+        this.powerupsMap = new Map(); // For tracking powerup data
     }
 
     preload() {
@@ -61,6 +65,10 @@ class MainScene extends Phaser.Scene {
             
             // Create background grid texture
             this.createGridTexture(100, 0x008800); // Grid size 100, dark green
+
+            // Create Power-up Textures
+            this.createPowerupTexture('health', 0xff0000); // Red cross
+            this.createPowerupTexture('speed', 0x0000ff); // Blue arrow/chevron
 
             Logger.info('Preload setup completed');
         } catch (error) {
@@ -192,6 +200,36 @@ class MainScene extends Phaser.Scene {
         graphics.destroy();
     }
 
+    createPowerupTexture(type, color) {
+        const graphics = this.add.graphics();
+        const size = 24; // Powerup texture size
+        graphics.fillStyle(color, 1);
+        graphics.lineStyle(2, 0xffffff, 0.8); // White border
+
+        if (type === 'health') {
+            // Draw a cross
+            const barWidth = size * 0.6;
+            const barHeight = size * 0.2;
+            graphics.fillRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
+            graphics.fillRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
+            graphics.strokeRect((size - barWidth) / 2, (size - barHeight) / 2, barWidth, barHeight);
+            graphics.strokeRect((size - barHeight) / 2, (size - barWidth) / 2, barHeight, barWidth);
+        } else if (type === 'speed') {
+            // Draw a simple chevron/arrow shape
+            graphics.beginPath();
+            graphics.moveTo(size * 0.2, size * 0.8);
+            graphics.lineTo(size * 0.5, size * 0.2);
+            graphics.lineTo(size * 0.8, size * 0.8);
+            graphics.lineTo(size * 0.5, size * 0.5); // Point inside
+            graphics.closePath();
+            graphics.fillPath();
+            graphics.strokePath();
+        }
+
+        graphics.generateTexture(`powerup_${type}`, size, size);
+        graphics.destroy();
+    }
+
     create() {
         try {
             Logger.info('Starting scene creation...');
@@ -225,6 +263,7 @@ class MainScene extends Phaser.Scene {
             this.bulletsGroup = this.add.group();
             this.playersGroup = this.add.group();
             this.asteroidsGroup = this.add.group();
+            this.powerupsGroup = this.add.group(); // Initialize powerups group
             
             // Initialize movement target
             this.target = null;
@@ -318,6 +357,9 @@ class MainScene extends Phaser.Scene {
             this.physics.add.collider(this.bulletsGroup, this.playersGroup, this.handlePlayerHit, null, this);
             Logger.debug('Collision detection setup complete');
 
+            // Add player-powerup collision
+            this.physics.add.overlap(this.playersGroup, this.powerupsGroup, this.handlePlayerPowerupCollision, null, this);
+
             // Initialize particle systems
             try {
                 this.setupParticleSystems();
@@ -345,6 +387,29 @@ class MainScene extends Phaser.Scene {
             this.cameras.main.on('scroll', () => {
                 // This might not be strictly necessary if scrollFactor is 1, but can help ensure alignment
                  this.grid.setTilePosition(this.cameras.main.scrollX, this.cameras.main.scrollY);
+            });
+
+            socket.on('powerupSpawned', (powerupInfo) => {
+                this.addPowerup(powerupInfo);
+            });
+
+            socket.on('powerupRemoved', (powerupId) => {
+                this.removePowerup(powerupId);
+            });
+
+            socket.on('activateSpeedBoost', (data) => {
+                if (!this.speedBoostActive) { // Prevent stacking boosts
+                    this.speedBoostActive = true;
+                    Logger.info('Speed boost activated!');
+                    // Optionally add visual indicator like tinting the ship
+                    if (this.playerShip) this.playerShip.setTint(0x00ffff); // Cyan tint
+
+                    this.time.delayedCall(data.duration, () => {
+                        this.speedBoostActive = false;
+                        Logger.info('Speed boost deactivated.');
+                        if (this.playerShip) this.playerShip.clearTint(); // Remove tint
+                    });
+                }
             });
 
             this.isInitialized = true;
@@ -1130,6 +1195,11 @@ class MainScene extends Phaser.Scene {
 
             // Handle LOCAL player ship movement to target
             if (this.playerShip && this.playerShip.active && this.playerShip.body) { // Check if active
+                // Apply speed boost multiplier if active
+                const currentSpeedMultiplier = this.speedBoostActive ? this.speedBoostMultiplier : 1;
+                const maxVelocity = 300 * currentSpeedMultiplier; // Adjust max velocity
+                this.playerShip.body.setMaxVelocity(maxVelocity);
+
                 if (this.target && this.isMoving) {
                     // Calculate distance to target
                     const distance = Phaser.Math.Distance.Between(
@@ -1153,8 +1223,8 @@ class MainScene extends Phaser.Scene {
                     }
 
                     if (distance > this.arrivalThreshold) {
-                        // Calculate desired velocity based on distance
-                        let speed = Math.min(distance * 2, 300);
+                        // Calculate desired velocity based on distance and boost
+                        let speed = Math.min(distance * 2, maxVelocity) * currentSpeedMultiplier;
                         // Use targetAngle - PI/2 for velocity to match ship's orientation
                         const velocity = this.physics.velocityFromRotation(targetAngle - Math.PI/2, speed);
                         
@@ -1228,6 +1298,48 @@ class MainScene extends Phaser.Scene {
         } catch (error) {
             Logger.error('Error in update loop:', error);
         }
+    }
+
+    addPowerup(powerupInfo) {
+        if (this.powerupsMap.has(powerupInfo.id)) return; // Don't add duplicates
+
+        const textureName = `powerup_${powerupInfo.type}`;
+        const powerupSprite = this.physics.add.sprite(powerupInfo.x, powerupInfo.y, textureName);
+        
+        if (!powerupSprite.texture.exists) { // Check if texture loaded correctly
+             Logger.warn(`Texture not found for powerup type: ${powerupInfo.type}`);
+             powerupSprite.destroy(); // Clean up if texture missing
+             return;
+        }
+        
+        this.powerupsGroup.add(powerupSprite);
+        powerupSprite.setData('powerupId', powerupInfo.id); // Store ID for collision
+        powerupSprite.setData('powerupType', powerupInfo.type);
+        this.powerupsMap.set(powerupInfo.id, powerupSprite);
+    }
+
+    removePowerup(powerupId) {
+        const powerupSprite = this.powerupsMap.get(powerupId);
+        if (powerupSprite) {
+            powerupSprite.destroy();
+            this.powerupsMap.delete(powerupId);
+        }
+    }
+
+    handlePlayerPowerupCollision(playerSprite, powerupSprite) {
+        // Only the local player should trigger the collection
+        if (playerSprite === this.playerShip) {
+            const powerupId = powerupSprite.getData('powerupId');
+            if (powerupId !== undefined) {
+                 Logger.debug(`Collided with powerup: ${powerupId}`);
+                // Tell the server we collected it
+                socket.emit('powerupCollected', powerupId);
+                // Destroy locally immediately for responsiveness (server will confirm removal)
+                this.removePowerup(powerupId); 
+                // Optionally play a local pickup sound
+                // this.sounds.powerup.play();
+            }
+        } 
     }
 }
 

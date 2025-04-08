@@ -64,13 +64,13 @@ let powerupId = 0;
 // Game constants
 const PLAYER_HEALTH = 100;
 const RESPAWN_TIME = 3000; // 3 seconds
-const MAX_ASTEROIDS = 25; // Increased from 20
+const MAX_ASTEROIDS = 35; // Increased further from 25
 const MAX_POWERUPS = 5;
-const ASTEROID_SPAWN_INTERVAL = 4000; // Decreased from 5000 (4 seconds)
-const POWERUP_SPAWN_INTERVAL = 15000; // 15 seconds
+const ASTEROID_SPAWN_INTERVAL = 3000; // Decreased further from 4000 (3 seconds)
+const POWERUP_SPAWN_INTERVAL = 10000; // Spawn powerups more often (10 seconds)
 
 // Power-up types
-const POWERUP_TYPES = ['spread', 'laser', 'health'];
+const POWERUP_TYPES = ['health', 'speed']; // Add 'speed' type
 
 // Generate power-ups
 function generatePowerup() {
@@ -116,7 +116,7 @@ function updateAsteroids() {
         asteroid.y += asteroid.velocityY * (1/60);
         
         // Remove asteroids that drift too far off-screen
-        const removalPadding = 200; // How far off screen before removing
+        const removalPadding = 300; // Increased padding from 200
         if (asteroid.x < -removalPadding || 
             asteroid.x > GAME_WIDTH + removalPadding || 
             asteroid.y < -removalPadding || 
@@ -164,17 +164,6 @@ function handleAsteroidHit(asteroidId, hitData) {
     asteroids.delete(asteroidId);
     io.emit('asteroidDestroyed', asteroidId);
 
-    // Award points based on asteroid size BEFORE splitting
-    if (player) {
-        const points = (3 - asteroid.size) * 50; // Adjusted points: L:50, M:100, S:150
-        player.score += points;
-        io.emit('scoreUpdate', {
-            playerId: hitData.playerId,
-            score: player.score,
-            points: points 
-        });
-    }
-    
     // Create fragments if it wasn't a small asteroid
     if (asteroid.size > 0) {
         const numFragments = asteroid.size === 2 ? 2 : 2; // Large -> 2 Medium, Medium -> 2 Small
@@ -187,10 +176,11 @@ function handleAsteroidHit(asteroidId, hitData) {
             // Try to get bullet velocity if available (might need adjustment based on hitData structure)
             const bulletAngle = Math.atan2(hitData.velocityY || 0, hitData.velocityX || 0);
             const fragmentAngle = bulletAngle + randomAngleOffset + (i * Math.PI); // Opposite directions +/- randomness
+            const fragmentSpawnOffset = 10; // Small offset
 
             createAsteroid(
-                asteroid.x, // Fragments start at parent's position
-                asteroid.y,
+                asteroid.x + Math.cos(fragmentAngle) * fragmentSpawnOffset, // Apply offset
+                asteroid.y + Math.sin(fragmentAngle) * fragmentSpawnOffset, // Apply offset
                 newSize,
                 (asteroid.velocityX * 0.5) + Math.cos(fragmentAngle) * baseSpeed, // Inherit some velocity + fragment burst
                 (asteroid.velocityY * 0.5) + Math.sin(fragmentAngle) * baseSpeed
@@ -221,6 +211,7 @@ io.on('connection', (socket) => {
                 velocityX: 0,
                 velocityY: 0,
                 score: 0,
+                kills: 0,
                 health: PLAYER_HEALTH,
                 isAlive: true
             };
@@ -241,22 +232,34 @@ io.on('connection', (socket) => {
     });
 
     // Handle power-up collection
-    socket.on('powerupCollected', (data) => {
-        const powerup = powerups.get(data.id);
-        if (powerup) {
-            powerups.delete(data.id);
-            io.emit('powerupCollected', data.id);
+    socket.on('powerupCollected', (powerupId) => {
+        const powerup = powerups.get(powerupId);
+        const player = players.get(socket.id);
 
-            // Handle health power-up
-            if (powerup.type === 'health') {
-                const player = players.get(socket.id);
-                if (player) {
-                    player.health = Math.min(player.health + 50, PLAYER_HEALTH);
-                    io.emit('playerHealthUpdate', {
-                        id: player.id,
-                        health: player.health
+        if (powerup && player && player.isAlive) {
+            logger.debug(`Player ${player.name} collected powerup ${powerupId} of type ${powerup.type}`);
+            // Remove powerup from server state
+            powerups.delete(powerupId);
+            // Notify all clients to remove the powerup sprite
+            io.emit('powerupRemoved', powerupId);
+
+            // Apply power-up effect
+            switch (powerup.type) {
+                case 'health':
+                    player.health = Math.min(player.health + 35, PLAYER_HEALTH); // Heal 35, clamp to max
+                    // Send health update to all (so everyone sees the health bar change)
+                    io.emit('playerHealthUpdate', { 
+                        id: player.id, 
+                        health: player.health,
+                        // Include position for interpolation/snap
+                        x: player.x, 
+                        y: player.y 
                     });
-                }
+                    break;
+                case 'speed':
+                    // Send speed boost activation only to the collecting player
+                    socket.emit('activateSpeedBoost', { duration: 3000 }); // Send duration (3s)
+                    break;
             }
         }
     });
@@ -307,20 +310,20 @@ io.on('connection', (socket) => {
             
             if (hitPlayer.health <= 0 && hitPlayer.isAlive) { // Only trigger death once
                 hitPlayer.isAlive = false;
-                // Emit player killed event TO ALL clients
                 io.emit('playerKilled', { 
                     playerId: hitPlayer.id, 
                     killerId: data.shooterId 
                 });
 
-                // Update killer's score (if not self-kill)
+                // Update killer's KILLS (if not self-kill)
                 if (data.shooterId !== hitPlayer.id) {
                     const killer = players.get(data.shooterId);
                     if (killer) {
-                        killer.score += 100;
-                        io.emit('scoreUpdate', {
+                        killer.kills = (killer.kills || 0) + 1; // Increment kills
+                        // Emit kills update
+                        io.emit('killsUpdate', { 
                             playerId: killer.id,
-                            score: killer.score
+                            kills: killer.kills
                         });
                     }
                 }
