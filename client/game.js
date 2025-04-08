@@ -474,8 +474,8 @@ class MainScene extends Phaser.Scene {
             socket.on('playerKilled', (data) => {
                 const player = this.playersMap.get(data.playerId);
                 if (player) {
-                    // Create a large explosion effect
-                    this.createExplosion(player.sprite.x, player.sprite.y);
+                    // Create a large, white explosion effect for player death
+                    this.createExplosion(player.sprite.x, player.sprite.y, 0xffffff, 1.5); // White tint, larger scale
                     
                     // Make the ship sprite inactive/invisible
                     player.sprite.setActive(false).setVisible(false);
@@ -553,6 +553,8 @@ class MainScene extends Phaser.Scene {
             });
 
             socket.on('gameUpdate', (state) => {
+                const receivedAsteroidIds = new Set(); // Keep track of asteroids received in this update
+
                 state.players.forEach(playerInfo => {
                     // Store interpolation targets for OTHER players
                     // Always update health for all (including self)
@@ -580,10 +582,26 @@ class MainScene extends Phaser.Scene {
 
                 // Update asteroids (always controlled by server)
                 state.asteroids.forEach(asteroidInfo => {
+                    receivedAsteroidIds.add(asteroidInfo.id); // Mark this asteroid ID as received
                     const asteroid = this.asteroidsMap.get(asteroidInfo.id);
                     if (asteroid) {
+                        // Update existing asteroid
                         asteroid.sprite.setPosition(asteroidInfo.x, asteroidInfo.y);
                         asteroid.sprite.setRotation(asteroidInfo.rotation);
+                    } else {
+                        // Asteroid exists on server but not client, add it
+                        this.addAsteroid(asteroidInfo); 
+                    }
+                });
+
+                // Remove asteroids that exist on client but NOT on server (synchronize deletions)
+                this.asteroidsMap.forEach((asteroidData, asteroidId) => {
+                    if (!receivedAsteroidIds.has(asteroidId)) {
+                        Logger.debug(`Removing asteroid ${asteroidId} not present in gameUpdate`);
+                        if (asteroidData.sprite) {
+                            asteroidData.sprite.destroy();
+                        }
+                        this.asteroidsMap.delete(asteroidId);
                     }
                 });
             });
@@ -784,8 +802,8 @@ class MainScene extends Phaser.Scene {
         // Play explosion sound
         this.sounds.explosion.play();
         
-        // Create explosion effect at asteroid position
-        this.createExplosion(asteroidSprite.x, asteroidSprite.y);
+        // Create explosion effect at asteroid position (standard green)
+        this.createExplosion(asteroidSprite.x, asteroidSprite.y); // Default green tint
         
         // Tell the server about the hit, including bullet velocity
         socket.emit('asteroidHit', { 
@@ -911,24 +929,28 @@ class MainScene extends Phaser.Scene {
         }
     }
 
-    createExplosion(x, y) {
-        // Create a smaller, faster explosion effect
-        const particles = this.add.particles(x, y, 'bullet', {
-            speed: { min: 30, max: 80 },
-            scale: { start: 0.2, end: 0 },
-            blendMode: 'ADD',
-            lifespan: 400,
+    createExplosion(x, y, tint = 0x00ff00, scaleMultiplier = 1) {
+        // Enhanced explosion effect
+        const particleCount = Math.floor(15 * scaleMultiplier);
+        const particles = this.add.particles(x, y, 'bullet', { // Use bullet texture for debris
+            speed: { min: 50 * scaleMultiplier, max: 150 * scaleMultiplier },
+            scale: { start: 0.3 * scaleMultiplier, end: 0 },
+            alpha: { start: 1, end: 0 }, 
+            blendMode: 'ADD', 
+            lifespan: 600, 
             gravityY: 0,
-            quantity: 8,
-            tint: 0x00ff00,
+            quantity: particleCount, // More particles based on scale
+            tint: tint, // Use provided tint
             emitting: false
         });
         
-        particles.explode(10);
+        particles.explode(particleCount);
+        
+        // Play sound (already exists)
         this.sounds.explosion.play();
         
-        // Clean up particles sooner
-        this.time.delayedCall(500, () => {
+        // Clean up particles
+        this.time.delayedCall(800, () => { // Slightly longer cleanup
             particles.destroy();
         });
     }
