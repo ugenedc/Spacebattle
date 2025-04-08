@@ -3,7 +3,7 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http, {
     cors: {
-        origin: "*",
+        origin: process.env.CLIENT_ORIGIN || "*",
         methods: ["GET", "POST"]
     }
 });
@@ -44,8 +44,8 @@ process.on('unhandledRejection', (reason, promise) => {
     logger.error('Unhandled Rejection:', reason);
 });
 
-// Enable CORS for all routes
-app.use(cors());
+// Enable CORS using the environment variable
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || "*" }));
 
 // Serve static files from the client directory
 app.use(express.static(path.join(__dirname, '../client')));
