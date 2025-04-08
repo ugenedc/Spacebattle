@@ -349,10 +349,13 @@ class MainScene extends Phaser.Scene {
             });
 
             socket.on('playerMoved', (playerInfo) => {
-                const player = this.playersMap.get(playerInfo.id);
-                if (player) {
-                    player.sprite.setPosition(playerInfo.x, playerInfo.y);
-                    player.sprite.setRotation(playerInfo.rotation);
+                // Only update OTHER players based on this event
+                if (playerInfo.id !== socket.id) { 
+                    const player = this.playersMap.get(playerInfo.id);
+                    if (player) {
+                        player.sprite.setPosition(playerInfo.x, playerInfo.y);
+                        player.sprite.setRotation(playerInfo.rotation);
+                    }
                 }
             });
 
@@ -420,20 +423,27 @@ class MainScene extends Phaser.Scene {
             socket.on('gameUpdate', (state) => {
                 state.players.forEach(playerInfo => {
                     const player = this.playersMap.get(playerInfo.id);
-                    if (player) {
-                        player.sprite.setPosition(playerInfo.x, playerInfo.y);
-                        player.sprite.setRotation(playerInfo.rotation);
-                        // Update health if it has changed
-                        if (player.info.health !== playerInfo.health) {
-                            player.info.health = playerInfo.health;
-                            const healthBar = this.healthBars.get(playerInfo.id);
-                            if (healthBar) {
-                                this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
-                            }
+                    
+                    // Update OTHER players' position/rotation
+                    // Always update health for all (including self)
+                    if (playerInfo.id !== socket.id) {
+                        if (player) {
+                            player.sprite.setPosition(playerInfo.x, playerInfo.y);
+                            player.sprite.setRotation(playerInfo.rotation);
+                        }
+                    } 
+                    
+                    // Update health if it has changed (for self and others)
+                    if (player && player.info.health !== playerInfo.health) {
+                        player.info.health = playerInfo.health;
+                        const healthBar = this.healthBars.get(playerInfo.id);
+                        if (healthBar) {
+                            this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
                         }
                     }
                 });
 
+                // Update asteroids (always controlled by server)
                 state.asteroids.forEach(asteroidInfo => {
                     const asteroid = this.asteroidsMap.get(asteroidInfo.id);
                     if (asteroid) {
