@@ -264,7 +264,25 @@ io.on('connection', (socket) => {
     // Handle player hit with different weapon types
     socket.on('playerHit', (data) => {
         const hitPlayer = players.get(data.hitPlayerId);
+        const shooter = players.get(data.shooterId);
+
         if (hitPlayer && hitPlayer.isAlive) {
+            // Calculate knockback direction (from shooter towards hit player)
+            let knockbackDirection = { x: 0, y: 0 };
+            if (shooter) { // Ensure shooter exists to calculate direction
+                const dx = hitPlayer.x - shooter.x;
+                const dy = hitPlayer.y - shooter.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist > 0) { // Avoid division by zero
+                    knockbackDirection.x = dx / dist;
+                    knockbackDirection.y = dy / dist;
+                }
+            } else { // Fallback if shooter data isn't available (e.g. disconnected?)
+                // Could use bullet vector if available in `data`, or just apply damage without knockback
+            }
+            
+            const knockbackForce = 30; // Adjust force as needed
+
             // Different damage for different weapon types
             let damage = 20; // default damage
             switch (data.weaponType) {
@@ -277,6 +295,15 @@ io.on('connection', (socket) => {
             }
             
             hitPlayer.health -= damage;
+            
+            // Apply knockback before clamping
+            hitPlayer.x += knockbackDirection.x * knockbackForce;
+            hitPlayer.y += knockbackDirection.y * knockbackForce;
+
+            // Clamp position AFTER applying knockback
+            const halfShipWidth = 12;
+            hitPlayer.x = Math.max(halfShipWidth, Math.min(GAME_WIDTH - halfShipWidth, hitPlayer.x));
+            hitPlayer.y = Math.max(halfShipWidth, Math.min(GAME_HEIGHT - halfShipWidth, hitPlayer.y));
             
             if (hitPlayer.health <= 0 && hitPlayer.isAlive) { // Only trigger death once
                 hitPlayer.isAlive = false;
@@ -315,9 +342,12 @@ io.on('connection', (socket) => {
                 }, RESPAWN_TIME);
             } else if (hitPlayer.isAlive) { // Only update health if still alive
                 // Send health update only (not needed if killed)
+                // Also send updated position due to knockback
                 io.emit('playerHealthUpdate', { 
                     id: hitPlayer.id, 
-                    health: hitPlayer.health 
+                    health: hitPlayer.health,
+                    x: hitPlayer.x, // Include position
+                    y: hitPlayer.y
                 });
             }
         }
@@ -368,6 +398,10 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         try {
             logger.info(`Player ${socket.id} disconnected`);
+            // Remove player from server state
+            players.delete(socket.id);
+            // Notify all other clients that this player left
+            io.emit('playerLeft', socket.id); 
         } catch (error) {
             logger.error(`Error handling disconnection for player ${socket.id}:`, error);
         }
