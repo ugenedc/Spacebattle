@@ -41,6 +41,7 @@ class MainScene extends Phaser.Scene {
         this.arrivalThreshold = 5; // Distance threshold for arrival
         this.targetIndicator = null;
         this.scoreText = null; // Add this to track score text object
+        this.grid = null; // Add this to track the grid TileSprite
     }
 
     preload() {
@@ -54,10 +55,40 @@ class MainScene extends Phaser.Scene {
             }
             this.createBulletTexture();
             
+            // Create background grid texture
+            this.createGridTexture(100, 0x008800); // Grid size 100, dark green
+
             Logger.info('Preload setup completed');
         } catch (error) {
             Logger.error('Error in preload:', error);
         }
+    }
+
+    createGridTexture(cellSize, color) {
+        const graphics = this.add.graphics();
+        graphics.lineStyle(1, color, 0.5); // 1px line, specified color, 50% alpha
+
+        // Draw the lines for one cell
+        graphics.beginPath();
+        graphics.moveTo(0, 0);
+        graphics.lineTo(cellSize, 0);
+        graphics.lineTo(cellSize, cellSize);
+        graphics.lineTo(0, cellSize);
+        graphics.lineTo(0, 0);
+        graphics.strokePath();
+
+        // It's better practice to draw only the necessary lines for tiling
+        // Draw right and bottom lines only for a tileable pattern
+        graphics.clear();
+        graphics.lineStyle(1, color, 0.3); // Make it slightly more subtle
+        graphics.moveTo(cellSize - 1, 0);
+        graphics.lineTo(cellSize - 1, cellSize);
+        graphics.moveTo(0, cellSize - 1);
+        graphics.lineTo(cellSize, cellSize - 1);
+        graphics.strokePath();
+
+        graphics.generateTexture('gridTexture', cellSize, cellSize);
+        graphics.destroy();
     }
 
     createShipTexture() {
@@ -164,6 +195,12 @@ class MainScene extends Phaser.Scene {
             // Set background color
             this.cameras.main.setBackgroundColor('#000000');
             
+            // Add the TileSprite background grid
+            // Make it larger than the typical screen to cover camera movement
+            this.grid = this.add.tileSprite(0, 0, this.game.config.width * 2, this.game.config.height * 2, 'gridTexture');
+            this.grid.setOrigin(0, 0);
+            this.grid.setScrollFactor(1); // Grid scrolls with the camera
+
             // Initialize game object groups
             this.bulletsGroup = this.add.group();
             this.playersGroup = this.add.group();
@@ -280,6 +317,12 @@ class MainScene extends Phaser.Scene {
             // Create leaderboard
             this.createLeaderboard();
             Logger.debug('Leaderboard created');
+
+            // Make sure the grid updates its position with the camera
+            this.cameras.main.on('scroll', () => {
+                // This might not be strictly necessary if scrollFactor is 1, but can help ensure alignment
+                 this.grid.setTilePosition(this.cameras.main.scrollX, this.cameras.main.scrollY);
+            });
 
             this.isInitialized = true;
             Logger.info('Scene creation completed successfully');
