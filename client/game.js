@@ -191,11 +191,15 @@ class MainScene extends Phaser.Scene {
                 }
             });
             
-            // Setup socket connection with better error handling
-            const serverPort = 3000;
-            Logger.info(`Attempting to connect to server on port ${serverPort}`);
+            // Setup socket connection
+            // Use the deployed server URL in production, otherwise use localhost for development
+            const serverURL = window.location.hostname === "localhost" 
+                              ? `http://localhost:3000` 
+                              : window.location.origin; 
             
-            socket = io(`http://localhost:${serverPort}`, {
+            Logger.info(`Attempting to connect to server at ${serverURL}`);
+            
+            socket = io(serverURL, {
                 reconnection: true,
                 reconnectionAttempts: 10,
                 reconnectionDelay: 1000,
