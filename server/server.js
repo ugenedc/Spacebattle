@@ -65,10 +65,10 @@ let powerupId = 0;
 // Game constants
 const PLAYER_HEALTH = 100;
 const RESPAWN_TIME = 3000; // 3 seconds
-const MAX_ASTEROIDS = 35; // Increased further from 25
-const MAX_POWERUPS = 5;
-const ASTEROID_SPAWN_INTERVAL = 3000; // Decreased further from 4000 (3 seconds)
-const POWERUP_SPAWN_INTERVAL = 10000; // Spawn powerups more often (10 seconds)
+const MAX_ASTEROIDS = 50; // Increased significantly from 35
+const MAX_POWERUPS = 10; // Allow more powerups
+const ASTEROID_SPAWN_INTERVAL = 2500; // Decreased further from 3000 (2.5 seconds)
+const POWERUP_SPAWN_INTERVAL = 6000; // Spawn powerups faster (6 seconds)
 const PLAYER_INACTIVITY_TIMEOUT = 30000; // 30 seconds of inactivity
 const INACTIVITY_CHECK_INTERVAL = 10000; // Check every 10 seconds
 
@@ -437,12 +437,20 @@ http.listen(PORT, () => {
     logger.info('Initial asteroids spawned'); 
 });
 
-// Game loop for asteroid updates (This should remain)
+// Game loop for asteroid updates AND sending game state
 setInterval(() => {
     updateAsteroids();
+
+    // Prepare leaderboard data (Top 5 players by kills)
+    const leaderboard = Array.from(players.values())
+        .sort((a, b) => (b.kills || 0) - (a.kills || 0)) // Sort by kills descending
+        .slice(0, 5) // Take top 5
+        .map(p => ({ name: p.name, kills: p.kills || 0 })); // Select only name and kills
+
     io.emit('gameUpdate', {
         players: Array.from(players.values()),
-        asteroids: Array.from(asteroids.values())
+        asteroids: Array.from(asteroids.values()),
+        leaderboard: leaderboard // Include leaderboard in game update
     });
 }, 1000 / 60); // 60 times per second
 

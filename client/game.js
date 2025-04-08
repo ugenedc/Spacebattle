@@ -1393,8 +1393,9 @@ class MainScene extends Phaser.Scene {
         // Only the local player should trigger the collection
         if (playerSprite === this.playerShip) {
             const powerupId = powerupSprite.getData('powerupId');
+            const powerupType = powerupSprite.getData('powerupType'); // Get type for logging
             if (powerupId !== undefined) {
-                 Logger.debug(`Collided with powerup: ${powerupId}`);
+                 Logger.debug(`Player collided with powerup: ID=${powerupId}, Type=${powerupType}`); // Added type to log
                 // Tell the server we collected it
                 socket.emit('powerupCollected', powerupId);
                 // Destroy locally immediately for responsiveness (server will confirm removal)
