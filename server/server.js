@@ -47,9 +47,8 @@ process.on('unhandledRejection', (reason, promise) => {
 // Enable CORS using the environment variable
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || "*" }));
 
-// Serve static files from the client directory
-app.use(express.static(path.join(__dirname, '../client')));
-app.use('/assets', express.static(path.join(__dirname, '../client/assets')));
+// Serve static files from the BUILT client directory (dist)
+app.use(express.static(path.join(__dirname, '../dist')));
 
 // Game world dimensions
 const GAME_WIDTH = 1600;
