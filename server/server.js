@@ -51,8 +51,8 @@ app.use(cors({ origin: process.env.CLIENT_ORIGIN || "*" }));
 app.use(express.static(path.join(__dirname, '../dist')));
 
 // Game world dimensions
-const GAME_WIDTH = 1600;
-const GAME_HEIGHT = 1200;
+const GAME_WIDTH = 2000;
+const GAME_HEIGHT = 1500;
 
 // Game state
 const players = new Map();
@@ -64,9 +64,9 @@ let powerupId = 0;
 // Game constants
 const PLAYER_HEALTH = 100;
 const RESPAWN_TIME = 3000; // 3 seconds
-const MAX_ASTEROIDS = 20;
+const MAX_ASTEROIDS = 25; // Increased from 20
 const MAX_POWERUPS = 5;
-const ASTEROID_SPAWN_INTERVAL = 5000; // 5 seconds
+const ASTEROID_SPAWN_INTERVAL = 4000; // Decreased from 5000 (4 seconds)
 const POWERUP_SPAWN_INTERVAL = 15000; // 15 seconds
 
 // Power-up types
@@ -138,7 +138,7 @@ function initializeAsteroids() {
     asteroids.clear();
     
     // Create initial large asteroids only
-    const initialCount = 10; // Adjust count as needed
+    const initialCount = 15; // Slightly more asteroids for bigger map
     for (let i = 0; i < initialCount; i++) {
         createAsteroid(
             GAME_WIDTH * (0.1 + 0.8 * Math.random()),  // Spread across map
@@ -157,42 +157,44 @@ function handleAsteroidHit(asteroidId, hitData) {
     const asteroid = asteroids.get(asteroidId);
     if (!asteroid) return;
 
+    // Get player who shot (if any)
+    const player = players.get(hitData.playerId);
+
     // Remove the hit asteroid
     asteroids.delete(asteroidId);
     io.emit('asteroidDestroyed', asteroidId);
 
-    // Create fragments for non-small asteroids
+    // Award points based on asteroid size BEFORE splitting
+    if (player) {
+        const points = (3 - asteroid.size) * 50; // Adjusted points: L:50, M:100, S:150
+        player.score += points;
+        io.emit('scoreUpdate', {
+            playerId: hitData.playerId,
+            score: player.score,
+            points: points 
+        });
+    }
+    
+    // Create fragments if it wasn't a small asteroid
     if (asteroid.size > 0) {
-        const numFragments = asteroid.size === 2 ? 3 : 2;
+        const numFragments = asteroid.size === 2 ? 2 : 2; // Large -> 2 Medium, Medium -> 2 Small
         const newSize = asteroid.size - 1;
         
         for (let i = 0; i < numFragments; i++) {
-            // Calculate spread angle for fragments
-            const spreadAngle = (2 * Math.PI / numFragments) * i + Math.random() * 0.5;
-            const speed = 150 + Math.random() * 50; // Faster fragments
-            
-            // Create fragment with offset position and spread velocity
-            createAsteroid(
-                asteroid.x + Math.cos(spreadAngle) * 20,
-                asteroid.y + Math.sin(spreadAngle) * 20,
-                newSize,
-                Math.cos(spreadAngle) * speed,
-                Math.sin(spreadAngle) * speed
-            );
-        }
-    }
+            // Calculate slightly randomized velocity for fragments based on original + bullet impact
+            const baseSpeed = 50; // Base speed for fragments
+            const randomAngleOffset = (Math.random() - 0.5) * Math.PI / 2; // +/- 45 degrees randomness
+            // Try to get bullet velocity if available (might need adjustment based on hitData structure)
+            const bulletAngle = Math.atan2(hitData.velocityY || 0, hitData.velocityX || 0);
+            const fragmentAngle = bulletAngle + randomAngleOffset + (i * Math.PI); // Opposite directions +/- randomness
 
-    // Award points based on asteroid size
-    if (hitData.playerId) {
-        const player = players.get(hitData.playerId);
-        if (player) {
-            const points = (3 - asteroid.size) * 100; // 300 for small, 200 for medium, 100 for large
-            player.score += points;
-            io.emit('scoreUpdate', {
-                playerId: hitData.playerId,
-                score: player.score,
-                points: points // Send points for visual feedback
-            });
+            createAsteroid(
+                asteroid.x, // Fragments start at parent's position
+                asteroid.y,
+                newSize,
+                (asteroid.velocityX * 0.5) + Math.cos(fragmentAngle) * baseSpeed, // Inherit some velocity + fragment burst
+                (asteroid.velocityY * 0.5) + Math.sin(fragmentAngle) * baseSpeed
+            );
         }
     }
 }
@@ -326,8 +328,10 @@ io.on('connection', (socket) => {
         const player = players.get(socket.id);
         if (player && player.isAlive) {
             // Update player state on the server
-            player.x = moveData.x;
-            player.y = moveData.y;
+            // Clamp position to game bounds
+            const halfShipWidth = 12; // Approx half width based on texture size
+            player.x = Math.max(halfShipWidth, Math.min(GAME_WIDTH - halfShipWidth, moveData.x));
+            player.y = Math.max(halfShipWidth, Math.min(GAME_HEIGHT - halfShipWidth, moveData.y));
             player.rotation = moveData.rotation;
             player.velocityX = moveData.velocityX;
             player.velocityY = moveData.velocityY;
@@ -363,57 +367,13 @@ io.on('connection', (socket) => {
     // Handle disconnection
     socket.on('disconnect', () => {
         try {
-            logger.info(`Player disconnected: ${socket.id}`);
-            players.delete(socket.id);
-            io.emit('playerLeft', socket.id);
+            logger.info(`Player ${socket.id} disconnected`);
         } catch (error) {
-            logger.error(`Error handling disconnect for ${socket.id}:`, error);
+            logger.error(`Error handling disconnection for player ${socket.id}:`, error);
         }
     });
 });
 
-// Start the server
 http.listen(PORT, () => {
-    logger.info(`Server running on port ${PORT}`);
-    initializeAsteroids(); // Initialize asteroids when server starts
-    logger.info('Initial asteroids spawned');
+    logger.info(`Server is running on port ${PORT}`);
 });
-
-// Game loop for asteroid updates
-setInterval(() => {
-    updateAsteroids();
-    io.emit('gameUpdate', {
-        players: Array.from(players.values()),
-        asteroids: Array.from(asteroids.values())
-    });
-}, 1000 / 60); // 60 times per second
-
-// Periodically spawn new asteroids (make them large too)
-setInterval(() => {
-    if (asteroids.size < MAX_ASTEROIDS) {
-        // Spawn large asteroids randomly near edges
-        const edge = Math.floor(Math.random() * 4);
-        let spawnX, spawnY;
-        const padding = 100; // How far off-screen to spawn
-        switch (edge) {
-            case 0: // Top
-                spawnX = Math.random() * GAME_WIDTH;
-                spawnY = -padding;
-                break;
-            case 1: // Right
-                spawnX = GAME_WIDTH + padding;
-                spawnY = Math.random() * GAME_HEIGHT;
-                break;
-            case 2: // Bottom
-                spawnX = Math.random() * GAME_WIDTH;
-                spawnY = GAME_HEIGHT + padding;
-                break;
-            case 3: // Left
-                spawnX = -padding;
-                spawnY = Math.random() * GAME_HEIGHT;
-                break;
-        }
-        createAsteroid(spawnX, spawnY, 2); // Spawn large asteroid
-        logger.debug('New large asteroid spawned from edge');
-    }
-}, ASTEROID_SPAWN_INTERVAL); 

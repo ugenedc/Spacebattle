@@ -24,6 +24,7 @@ class MainScene extends Phaser.Scene {
     constructor() {
         super({ key: 'MainScene' });
         this.playersMap = new Map(); // For tracking player data
+        this.playerInterpolationTargets = new Map(); // For smooth movement of other players
         this.asteroidsMap = new Map(); // For tracking asteroid data
         this.bulletsGroup = null; // Phaser group for bullets
         this.playersGroup = null; // Phaser group for player sprites
@@ -294,7 +295,7 @@ class MainScene extends Phaser.Scene {
             Logger.debug('Score display created');
 
             // Add collision detection
-            this.physics.add.collider(this.bulletsGroup, this.asteroidsGroup, this.handleBulletHit, null, this);
+            this.physics.add.collider(this.bulletsGroup, this.asteroidsGroup, this.handleAsteroidHit, null, this);
             this.physics.add.collider(this.bulletsGroup, this.playersGroup, this.handlePlayerHit, null, this);
             Logger.debug('Collision detection setup complete');
 
@@ -394,11 +395,17 @@ class MainScene extends Phaser.Scene {
             socket.on('playerMoved', (playerInfo) => {
                 // Only update OTHER players based on this event
                 if (playerInfo.id !== socket.id) { 
-                    const player = this.playersMap.get(playerInfo.id);
-                    if (player) {
-                        player.sprite.setPosition(playerInfo.x, playerInfo.y);
-                        player.sprite.setRotation(playerInfo.rotation);
-                    }
+                    const targetData = this.playerInterpolationTargets.get(playerInfo.id) || {};
+                    targetData.x = playerInfo.x;
+                    targetData.y = playerInfo.y;
+                    targetData.rotation = playerInfo.rotation;
+                    this.playerInterpolationTargets.set(playerInfo.id, targetData);
+                    // Don't set position directly here anymore
+                    // const player = this.playersMap.get(playerInfo.id);
+                    // if (player) {
+                    //     player.sprite.setPosition(playerInfo.x, playerInfo.y);
+                    //     player.sprite.setRotation(playerInfo.rotation);
+                    // }
                 }
             });
 
@@ -407,6 +414,7 @@ class MainScene extends Phaser.Scene {
                 if (player) {
                     player.sprite.destroy();
                     this.playersMap.delete(playerId);
+                    this.playerInterpolationTargets.delete(playerId); // Clean up target data
                 }
             });
 
@@ -456,6 +464,8 @@ class MainScene extends Phaser.Scene {
 
             socket.on('playerRespawned', (playerInfo) => {
                 const player = this.playersMap.get(playerInfo.id);
+                 // Clear any old interpolation target on respawn
+                this.playerInterpolationTargets.delete(playerInfo.id); 
                 if (player) {
                     // Reactivate/show the sprite and update position/state
                     player.sprite.setActive(true).setVisible(true);
@@ -463,6 +473,9 @@ class MainScene extends Phaser.Scene {
                     player.sprite.setRotation(playerInfo.rotation);
                     player.sprite.body.setVelocity(0, 0); // Reset velocity
                     player.info = playerInfo; // Update local info object
+
+                    // Trigger respawn effect
+                    this.createRespawnEffect(playerInfo.x, playerInfo.y);
 
                     // Re-add name text and health bar
                     const nameText = this.add.text(playerInfo.x, playerInfo.y - 30, playerInfo.name, {
@@ -507,18 +520,21 @@ class MainScene extends Phaser.Scene {
 
             socket.on('gameUpdate', (state) => {
                 state.players.forEach(playerInfo => {
-                    const player = this.playersMap.get(playerInfo.id);
-                    
-                    // Update OTHER players' position/rotation
+                    // Store interpolation targets for OTHER players
                     // Always update health for all (including self)
                     if (playerInfo.id !== socket.id) {
-                        if (player) {
-                            player.sprite.setPosition(playerInfo.x, playerInfo.y);
-                            player.sprite.setRotation(playerInfo.rotation);
-                        }
+                        const targetData = this.playerInterpolationTargets.get(playerInfo.id) || {};
+                        targetData.x = playerInfo.x;
+                        targetData.y = playerInfo.y;
+                        targetData.rotation = playerInfo.rotation;
+                        this.playerInterpolationTargets.set(playerInfo.id, targetData);
+                        // Don't set position directly here anymore
+                        // const player = this.playersMap.get(playerInfo.id);
+                        // if (player) { ... }
                     } 
                     
                     // Update health if it has changed (for self and others)
+                    const player = this.playersMap.get(playerInfo.id);
                     if (player && player.info.health !== playerInfo.health) {
                         player.info.health = playerInfo.health;
                         const healthBar = this.healthBars.get(playerInfo.id);
@@ -722,39 +738,36 @@ class MainScene extends Phaser.Scene {
         return bullet;
     }
 
-    handleBulletHit(bullet, asteroid) {
-        // Only process the collision if both objects still exist
-        if (!bullet.active || !asteroid.active) return;
+    handleAsteroidHit(bullet, asteroidSprite) {
+        // Find the asteroid ID from the sprite
+        const hitAsteroidData = Array.from(this.asteroidsMap.entries())
+            .find(([_, value]) => value.sprite === asteroidSprite);
         
-        const asteroidData = Array.from(this.asteroidsMap.entries())
-            .find(([_, value]) => value.sprite === asteroid);
-            
-        if (asteroidData) {
-            const [asteroidId, asteroidObj] = asteroidData;
-            const asteroidInfo = asteroidObj.info;
-            
-            // Create explosion effect
-            this.createExplosion(asteroid.x, asteroid.y);
-            
-            // Emit hit event to server
-            socket.emit('asteroidHit', { 
-                asteroidId,
-                size: asteroidInfo.size,
-                x: asteroid.x,
-                y: asteroid.y,
-                velocityX: asteroid.body.velocity.x,
-                velocityY: asteroid.body.velocity.y
-            });
-            
-            // Destroy the bullet
-            bullet.destroy();
-        }
+        if (!hitAsteroidData) return;
+        const [hitAsteroidId, hitAsteroidObj] = hitAsteroidData;
+
+        // Play explosion sound
+        this.sounds.explosion.play();
+        
+        // Create explosion effect at asteroid position
+        this.createExplosion(asteroidSprite.x, asteroidSprite.y);
+        
+        // Tell the server about the hit, including bullet velocity
+        socket.emit('asteroidHit', { 
+            asteroidId: hitAsteroidId,
+            velocityX: bullet.body.velocity.x, // Send bullet velocity
+            velocityY: bullet.body.velocity.y
+        });
+        
+        // Destroy bullet immediately
+        bullet.destroy();
+        // Asteroid sprite destruction is handled by the 'asteroidDestroyed' event from server
     }
 
-    handlePlayerHit(bullet, player) {
+    handlePlayerHit(bullet, playerSprite) {
         // Find the hit player's ID
         const hitPlayerData = Array.from(this.playersMap.entries())
-            .find(([_, value]) => value.sprite === player);
+            .find(([_, value]) => value.sprite === playerSprite);
             
         if (!hitPlayerData) return;
         
@@ -762,7 +775,7 @@ class MainScene extends Phaser.Scene {
         
         if (bullet.ownerId !== hitPlayerId) { // Don't hit self
             // Create hit effect
-            this.createHitEffect(player.x, player.y);
+            this.createHitEffect(playerSprite.x, playerSprite.y);
             
             // Play hit sound
             this.sounds.hit.play();
@@ -825,6 +838,9 @@ class MainScene extends Phaser.Scene {
     }
 
     wrapObject(object) {
+        // This function should now ONLY be used for asteroids if we want them to wrap
+        // Since we removed asteroid wrapping on the server, this function is currently unused.
+        // We can keep it for potential future use or remove it.
         const pad = 32;
         const width = this.game.config.width;
         const height = this.game.config.height;
@@ -969,91 +985,147 @@ class MainScene extends Phaser.Scene {
         });
     }
 
+    createRespawnEffect(x, y) {
+        // Create a shimmering/teleport-in effect
+        const particles = this.add.particles(x, y, 'ship', { // Use ship texture for effect
+            speed: { min: 20, max: 50 },
+            scale: { start: 0.5, end: 0 },
+            alpha: { start: 0.7, end: 0 },
+            blendMode: 'ADD',
+            lifespan: 600,
+            gravityY: 0,
+            quantity: 15,
+            tint: 0x00ffff, // Cyan color for respawn
+            emitting: false
+        });
+        
+        particles.explode(15);
+        
+        // Play a distinct sound (if you add one)
+        // this.sounds.respawn.play(); 
+        
+        // Clean up particles
+        this.time.delayedCall(600, () => {
+            particles.destroy();
+        });
+    }
+
     update() {
-        if (!this.isInitialized || !this.playerShip || !this.playerShip.body) {
+        if (!this.isInitialized) { // Don't check playerShip here, needs to run for interpolation
             return;
         }
 
         try {
-            // Update positions of names and health bars
+            // Interpolate other players' positions for smoother movement
             this.playersMap.forEach((player, id) => {
+                if (id !== socket.id && player.sprite.active) { // Don't interpolate self or inactive sprites
+                    const target = this.playerInterpolationTargets.get(id);
+                    const sprite = player.sprite;
+                    if (target) {
+                        const lerpFactor = 0.2; // Adjust for more/less smoothing (lower = smoother)
+                        sprite.x = Phaser.Math.Linear(sprite.x, target.x, lerpFactor);
+                        sprite.y = Phaser.Math.Linear(sprite.y, target.y, lerpFactor);
+                        // Interpolate rotation using shortest direction
+                        sprite.rotation = Phaser.Math.Angle.RotateTo(sprite.rotation, target.rotation, lerpFactor * 0.5); // Rotate slightly slower
+                    }
+                }
+
+                // Update UI elements for all players (including self)
                 const nameText = this.playerTexts.get(id);
                 const healthBar = this.healthBars.get(id);
-                if (nameText && healthBar) {
+                if (player.sprite.active && nameText && healthBar) { // Only if sprite is active
                     nameText.setPosition(player.sprite.x, player.sprite.y - 30);
                     this.updateHealthBar(healthBar, player.sprite.x, player.sprite.y - 20, player.info.health);
                 }
             });
 
-            // Handle ship movement to target
-            if (this.playerShip && this.target && this.isMoving) {
-                // Calculate distance to target
-                const distance = Phaser.Math.Distance.Between(
-                    this.playerShip.x, this.playerShip.y,
-                    this.target.x, this.target.y
-                );
+            // Handle LOCAL player ship movement to target
+            if (this.playerShip && this.playerShip.active && this.playerShip.body) { // Check if active
+                if (this.target && this.isMoving) {
+                    // Calculate distance to target
+                    const distance = Phaser.Math.Distance.Between(
+                        this.playerShip.x, this.playerShip.y,
+                        this.target.x, this.target.y
+                    );
 
-                // Calculate angle to target (add PI/2 to adjust for ship's default orientation)
-                const targetAngle = Phaser.Math.Angle.Between(
-                    this.playerShip.x, this.playerShip.y,
-                    this.target.x, this.target.y
-                ) + Math.PI/2;
+                    // Calculate angle to target (add PI/2 to adjust for ship's default orientation)
+                    const targetAngle = Phaser.Math.Angle.Between(
+                        this.playerShip.x, this.playerShip.y,
+                        this.target.x, this.target.y
+                    ) + Math.PI/2;
 
-                // Smooth rotation towards target
-                const currentAngle = this.playerShip.rotation;
-                const angleDiff = Phaser.Math.Angle.Wrap(targetAngle - currentAngle);
-                
-                if (Math.abs(angleDiff) > 0.02) {
-                    const rotationSpeed = 0.1;
-                    this.playerShip.rotation += Phaser.Math.Angle.Wrap(angleDiff * rotationSpeed);
-                }
-
-                if (distance > this.arrivalThreshold) {
-                    // Calculate desired velocity based on distance
-                    let speed = Math.min(distance * 2, 300);
-                    // Use targetAngle - PI/2 for velocity to match ship's orientation
-                    const velocity = this.physics.velocityFromRotation(targetAngle - Math.PI/2, speed);
+                    // Smooth rotation towards target
+                    const currentAngle = this.playerShip.rotation;
+                    const angleDiff = Phaser.Math.Angle.Wrap(targetAngle - currentAngle);
                     
-                    // Set velocity directly
-                    this.playerShip.body.setVelocity(velocity.x, velocity.y);
+                    if (Math.abs(angleDiff) > 0.02) {
+                        const rotationSpeed = 0.1;
+                        this.playerShip.rotation += Phaser.Math.Angle.Wrap(angleDiff * rotationSpeed);
+                    }
 
-                    // Update thrust particles position to match ship's orientation
-                    if (this.thrustParticles) {
-                        const thrustOffset = 20;
-                        this.thrustParticles.setPosition(
-                            this.playerShip.x - Math.cos(this.playerShip.rotation - Math.PI/2) * thrustOffset,
-                            this.playerShip.y - Math.sin(this.playerShip.rotation - Math.PI/2) * thrustOffset
-                        );
-                        if (!this.thrustParticles.emitting) {
-                            this.thrustParticles.start();
-                            this.sounds.thrust.play();
+                    if (distance > this.arrivalThreshold) {
+                        // Calculate desired velocity based on distance
+                        let speed = Math.min(distance * 2, 300);
+                        // Use targetAngle - PI/2 for velocity to match ship's orientation
+                        const velocity = this.physics.velocityFromRotation(targetAngle - Math.PI/2, speed);
+                        
+                        // Set velocity directly
+                        this.playerShip.body.setVelocity(velocity.x, velocity.y);
+
+                        // Update thrust particles position to match ship's orientation
+                        if (this.thrustParticles) {
+                            const thrustOffset = 20;
+                            this.thrustParticles.setPosition(
+                                this.playerShip.x - Math.cos(this.playerShip.rotation - Math.PI/2) * thrustOffset,
+                                this.playerShip.y - Math.sin(this.playerShip.rotation - Math.PI/2) * thrustOffset
+                            );
+                            if (!this.thrustParticles.emitting) {
+                                this.thrustParticles.start();
+                                this.sounds.thrust.play();
+                            }
+                        }
+                    } else {
+                        // We've arrived at the target
+                        this.playerShip.body.setVelocity(0, 0);
+                        this.isMoving = false;
+                        
+                        // Stop thrust effects
+                        if (this.thrustParticles) {
+                            this.thrustParticles.stop();
+                            this.sounds.thrust.stop();
+                        }
+                        
+                        // Remove target indicator
+                        if (this.targetIndicator) {
+                            this.targetIndicator.destroy();
+                            this.targetIndicator = null;
                         }
                     }
-                } else {
-                    // We've arrived at the target
-                    this.playerShip.body.setVelocity(0, 0);
-                    this.isMoving = false;
-                    
-                    // Stop thrust effects
-                    if (this.thrustParticles) {
-                        this.thrustParticles.stop();
-                        this.sounds.thrust.stop();
-                    }
-                    
-                    // Remove target indicator
-                    if (this.targetIndicator) {
-                        this.targetIndicator.destroy();
-                        this.targetIndicator = null;
-                    }
                 }
+
+                // Handle shooting with spacebar
+                if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+                    this.shoot();
+                }
+                
+                // Clamp local player position to game bounds
+                const halfShipWidth = 12; // Match server approx
+                const gameWidth = this.physics.world.bounds.width;
+                const gameHeight = this.physics.world.bounds.height;
+                this.playerShip.x = Phaser.Math.Clamp(this.playerShip.x, halfShipWidth, gameWidth - halfShipWidth);
+                this.playerShip.y = Phaser.Math.Clamp(this.playerShip.y, halfShipWidth, gameHeight - halfShipWidth);
+                
+                // Emit player movement for the local ship
+                socket.emit('playerMovement', {
+                    x: this.playerShip.x,
+                    y: this.playerShip.y,
+                    rotation: this.playerShip.rotation,
+                    velocityX: this.playerShip.body.velocity.x,
+                    velocityY: this.playerShip.body.velocity.y
+                });
             }
 
-            // Handle shooting with spacebar
-            if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-                this.shoot();
-            }
-
-            // Update asteroids
+            // Update asteroids (rotation only, position is set by server gameUpdate)
             this.asteroidsMap.forEach((asteroidObj) => {
                 const asteroid = asteroidObj.sprite;
                 if (asteroid) {
@@ -1065,18 +1137,6 @@ class MainScene extends Phaser.Scene {
                     // Wrap around screen edges
                     this.wrapObject(asteroid);
                 }
-            });
-
-            // Wrap around screen edges
-            this.wrapObject(this.playerShip);
-
-            // Emit player movement
-            socket.emit('playerMovement', {
-                x: this.playerShip.x,
-                y: this.playerShip.y,
-                rotation: this.playerShip.rotation,
-                velocityX: this.playerShip.body.velocity.x,
-                velocityY: this.playerShip.body.velocity.y
             });
 
         } catch (error) {
