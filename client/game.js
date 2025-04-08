@@ -828,23 +828,24 @@ class MainScene extends Phaser.Scene {
         asteroid.rotationSpeed = Phaser.Math.FloatBetween(-0.02, 0.02) * (asteroidInfo.size === 2 ? 0.5 : asteroidInfo.size === 1 ? 1 : 1.5);
         
         // Set scale based on size
+        let scaleMultiplier = 1.5; // Increase visual size
         let scale;
         let physicsRadius;
         switch(asteroidInfo.size) {
             case 2: // Large
-                scale = 1;
+                scale = 1 * scaleMultiplier;
                 physicsRadius = 32;
                 break;
             case 1: // Medium
-                scale = 0.7;
+                scale = 0.7 * scaleMultiplier;
                 physicsRadius = 24;
                 break;
             case 0: // Small
-                scale = 0.5;
+                scale = 0.5 * scaleMultiplier;
                 physicsRadius = 16;
                 break;
             default:
-                scale = 1;
+                scale = 1 * scaleMultiplier;
                 physicsRadius = 32;
         }
         
