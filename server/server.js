@@ -101,60 +101,55 @@ function createAsteroid(x, y, size = 2, velocityX = null, velocityY = null) {
         rotation: Math.random() * Math.PI * 2,
         size: size, // 2 = large, 1 = medium, 0 = small
         variation: Math.floor(Math.random() * 3), // Random asteroid shape
-        velocityX: velocityX || (Math.random() - 0.5) * (200 - size * 30), // Faster for smaller asteroids
-        velocityY: velocityY || (Math.random() - 0.5) * (200 - size * 30)
+        velocityX: velocityX || (Math.random() - 0.5) * (50 - size * 5), // Much slower 
+        velocityY: velocityY || (Math.random() - 0.5) * (50 - size * 5)  // Much slower 
     };
     asteroids.set(asteroid.id, asteroid);
-    io.emit('newAsteroid', asteroid); // Emit to all clients immediately
+    io.emit('newAsteroid', asteroid);
     return asteroid;
 }
 
 function updateAsteroids() {
-    asteroids.forEach((asteroid) => {
+    asteroids.forEach((asteroid, asteroidId) => {
         // Update position
         asteroid.x += asteroid.velocityX * (1/60);
         asteroid.y += asteroid.velocityY * (1/60);
         
-        // Wrap around screen edges with padding
-        const pad = 50;
-        if (asteroid.x < -pad) asteroid.x = GAME_WIDTH + pad;
-        if (asteroid.x > GAME_WIDTH + pad) asteroid.x = -pad;
-        if (asteroid.y < -pad) asteroid.y = GAME_HEIGHT + pad;
-        if (asteroid.y > GAME_HEIGHT + pad) asteroid.y = -pad;
+        // Remove asteroids that drift too far off-screen
+        const removalPadding = 200; // How far off screen before removing
+        if (asteroid.x < -removalPadding || 
+            asteroid.x > GAME_WIDTH + removalPadding || 
+            asteroid.y < -removalPadding || 
+            asteroid.y > GAME_HEIGHT + removalPadding) {
+            
+            asteroids.delete(asteroidId); // Remove from server state
+            io.emit('asteroidDestroyed', asteroidId); // Tell clients to remove it
+            logger.debug(`Asteroid ${asteroidId} drifted off screen and was removed.`);
+            return; // Stop processing this asteroid
+        }
         
         // Update rotation
         asteroid.rotation += (asteroid.size === 2 ? 0.01 : asteroid.size === 1 ? 0.02 : 0.03);
     });
 }
 
-// Initialize asteroids with better distribution
+// Initialize asteroids with better distribution (only large ones now)
 function initializeAsteroids() {
     asteroids.clear();
     
-    // Create initial asteroids with better spacing
-    for (let i = 0; i < 5; i++) {
+    // Create initial large asteroids only
+    const initialCount = 10; // Adjust count as needed
+    for (let i = 0; i < initialCount; i++) {
         createAsteroid(
-            GAME_WIDTH * (0.2 + 0.6 * Math.random()),  // Keep away from edges
-            GAME_HEIGHT * (0.2 + 0.6 * Math.random()), // Keep away from edges
-            2  // Large asteroids
+            GAME_WIDTH * (0.1 + 0.8 * Math.random()),  // Spread across map
+            GAME_HEIGHT * (0.1 + 0.8 * Math.random()), // Spread across map
+            2  // Large asteroids only
         );
     }
     
-    for (let i = 0; i < 3; i++) {
-        createAsteroid(
-            GAME_WIDTH * (0.2 + 0.6 * Math.random()),
-            GAME_HEIGHT * (0.2 + 0.6 * Math.random()),
-            1  // Medium asteroids
-        );
-    }
-    
-    for (let i = 0; i < 2; i++) {
-        createAsteroid(
-            GAME_WIDTH * (0.2 + 0.6 * Math.random()),
-            GAME_HEIGHT * (0.2 + 0.6 * Math.random()),
-            0  // Small asteroids
-        );
-    }
+    // Remove medium and small initial asteroids
+    // for (let i = 0; i < 3; i++) { ... }
+    // for (let i = 0; i < 2; i++) { ... }
 }
 
 // Handle asteroid being hit with improved fragment creation
@@ -393,10 +388,32 @@ setInterval(() => {
     });
 }, 1000 / 60); // 60 times per second
 
-// Periodically spawn new asteroids
+// Periodically spawn new asteroids (make them large too)
 setInterval(() => {
     if (asteroids.size < MAX_ASTEROIDS) {
-        createAsteroid();
-        logger.debug('New asteroid spawned');
+        // Spawn large asteroids randomly near edges
+        const edge = Math.floor(Math.random() * 4);
+        let spawnX, spawnY;
+        const padding = 100; // How far off-screen to spawn
+        switch (edge) {
+            case 0: // Top
+                spawnX = Math.random() * GAME_WIDTH;
+                spawnY = -padding;
+                break;
+            case 1: // Right
+                spawnX = GAME_WIDTH + padding;
+                spawnY = Math.random() * GAME_HEIGHT;
+                break;
+            case 2: // Bottom
+                spawnX = Math.random() * GAME_WIDTH;
+                spawnY = GAME_HEIGHT + padding;
+                break;
+            case 3: // Left
+                spawnX = -padding;
+                spawnY = Math.random() * GAME_HEIGHT;
+                break;
+        }
+        createAsteroid(spawnX, spawnY, 2); // Spawn large asteroid
+        logger.debug('New large asteroid spawned from edge');
     }
 }, ASTEROID_SPAWN_INTERVAL); 
