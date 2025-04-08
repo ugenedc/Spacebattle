@@ -43,6 +43,9 @@ class MainScene extends Phaser.Scene {
         this.targetIndicator = null;
         this.scoreText = null; // Add this to track score text object
         this.grid = null; // Add this to track the grid TileSprite
+        this.boundaryRect = null; // Add this to track the boundary rectangle
+        this.lastShotTime = 0; // Track the time of the last shot
+        this.shootCooldown = 300; // Cooldown in milliseconds (e.g., 300ms)
     }
 
     preload() {
@@ -193,6 +196,12 @@ class MainScene extends Phaser.Scene {
         try {
             Logger.info('Starting scene creation...');
             
+            // Set physics world bounds explicitly (matching config)
+            this.physics.world.setBounds(0, 0, this.physics.world.bounds.width, this.physics.world.bounds.height);
+            
+            // Set camera bounds
+            this.cameras.main.setBounds(0, 0, this.physics.world.bounds.width, this.physics.world.bounds.height);
+
             // Set background color
             this.cameras.main.setBackgroundColor('#000000');
             
@@ -201,6 +210,16 @@ class MainScene extends Phaser.Scene {
             this.grid = this.add.tileSprite(0, 0, this.game.config.width * 2, this.game.config.height * 2, 'gridTexture');
             this.grid.setOrigin(0, 0);
             this.grid.setScrollFactor(1); // Grid scrolls with the camera
+
+            // Draw the world boundary rectangle
+            const boundaryColor = 0x00ff00; // Bright Green
+            const boundaryThickness = 4; // Make it thicker
+            const boundaryAlpha = 0.8; // Make it more opaque
+            this.boundaryRect = this.add.graphics();
+            this.boundaryRect.lineStyle(boundaryThickness, boundaryColor, boundaryAlpha);
+            // Adjust strokeRect slightly to account for line thickness if needed, but 0,0 should be fine
+            this.boundaryRect.strokeRect(0, 0, this.physics.world.bounds.width, this.physics.world.bounds.height);
+            this.boundaryRect.setDepth(0); // Try depth 0 (same as default sprites) 
 
             // Initialize game object groups
             this.bulletsGroup = this.add.group();
@@ -319,6 +338,9 @@ class MainScene extends Phaser.Scene {
             this.createLeaderboard();
             Logger.debug('Leaderboard created');
 
+            // Add player-player collision
+            this.physics.add.collider(this.playersGroup, this.playersGroup);
+
             // Make sure the grid updates its position with the camera
             this.cameras.main.on('scroll', () => {
                 // This might not be strictly necessary if scrollFactor is 1, but can help ensure alignment
@@ -423,11 +445,23 @@ class MainScene extends Phaser.Scene {
                 if (player) {
                     // Update player health
                     player.info.health = data.health;
+
+                    // Update player position due to knockback (for other players)
+                    if (data.playerId !== socket.id && data.x !== undefined && data.y !== undefined) {
+                        const targetData = this.playerInterpolationTargets.get(data.playerId) || {};
+                        targetData.x = data.x;
+                        targetData.y = data.y;
+                        // Don't update rotation here, just position from knockback
+                        this.playerInterpolationTargets.set(data.playerId, targetData);
+                    } else if (data.playerId === socket.id && data.x !== undefined && data.y !== undefined) {
+                        // If it's the local player, snap position immediately
+                        this.playerShip.setPosition(data.x, data.y);
+                    }
                     
                     // Update health bar
                     const healthBar = this.healthBars.get(data.playerId);
                     if (healthBar) {
-                        this.updateHealthBar(healthBar, player.sprite.x, player.sprite.y - 20, data.health);
+                        this.updateHealthBar(healthBar, data.x, data.y - 20, data.health);
                     }
                     
                     // If this is the local player being damaged, add screen shake effect
@@ -594,11 +628,12 @@ class MainScene extends Phaser.Scene {
         
         // Enable arcade physics properly
         this.physics.world.enable(ship);
-        ship.body.setCollideWorldBounds(false);
-        ship.body.setBounce(0);
-        ship.body.setDrag(0.99);
-        ship.body.setAngularDrag(0.99);
+        ship.body.setCollideWorldBounds(true);
+        ship.body.setBounce(0.5);
+        ship.body.setDrag(0.95);
+        ship.body.setAngularDrag(0.98);
         ship.body.setMaxVelocity(300);
+        ship.body.setMass(1);
         
         this.playersGroup.add(ship);
         this.playersMap.set(playerInfo.id, {
@@ -713,10 +748,10 @@ class MainScene extends Phaser.Scene {
         // Set up bullet physics body
         this.physics.world.enable(bullet);
         bullet.body.setCircle(4); // Match the bullet's visual size
-        bullet.body.setCollideWorldBounds(false);
+        bullet.body.setCollideWorldBounds(false); // Bullets should not collide with world bounds
         
         // Set bullet velocity in direction of bullet's rotation
-        const speed = 400;
+        const speed = 600; // INCREASED bullet speed
         // Use the rotation provided in bulletInfo directly
         const velocity = this.physics.velocityFromRotation(bulletInfo.rotation, speed);
         bullet.setVelocity(velocity.x, velocity.y);
@@ -917,6 +952,14 @@ class MainScene extends Phaser.Scene {
     }
 
     shoot() {
+        const now = this.time.now; // Get current game time
+        if (!this.playerShip || !this.playerShip.active || now < this.lastShotTime + this.shootCooldown) {
+            // Check if ship exists, is active, AND if cooldown has passed
+            return; 
+        }
+        
+        this.lastShotTime = now; // Update last shot time
+
         if (!this.playerShip || !this.playerShip.active) return; // Check if ship exists and is active
 
         // Calculate bullet spawn position at ship's nose
@@ -931,7 +974,7 @@ class MainScene extends Phaser.Scene {
         this.bulletsGroup.add(bullet);
         
         // Set bullet velocity in direction of ship's rotation
-        const speed = 400;
+        const speed = 600; // INCREASED bullet speed locally too
         // Use adjusted rotation for velocity to match ship's visual orientation
         const velocity = this.physics.velocityFromRotation(rotation - Math.PI/2, speed); 
         bullet.setVelocity(velocity.x, velocity.y);
@@ -1165,6 +1208,10 @@ window.startGame = () => {
             physics: {
                 default: 'arcade',
                 arcade: {
+                    // Define game bounds for physics and camera
+                    // These should ideally match or be obtained from server constants
+                    width: 2000, 
+                    height: 1500,
                     debug: false,
                     gravity: { x: 0, y: 0 },
                     fps: 60

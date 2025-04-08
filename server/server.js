@@ -410,4 +410,45 @@ io.on('connection', (socket) => {
 
 http.listen(PORT, () => {
     logger.info(`Server is running on port ${PORT}`);
+    initializeAsteroids(); // Initialize asteroids when server starts
+    logger.info('Initial asteroids spawned'); 
 });
+
+// Game loop for asteroid updates (This should remain)
+setInterval(() => {
+    updateAsteroids();
+    io.emit('gameUpdate', {
+        players: Array.from(players.values()),
+        asteroids: Array.from(asteroids.values())
+    });
+}, 1000 / 60); // 60 times per second
+
+// Periodically spawn new asteroids (This should also remain)
+setInterval(() => {
+    if (asteroids.size < MAX_ASTEROIDS) {
+        // Spawn large asteroids randomly near edges
+        const edge = Math.floor(Math.random() * 4);
+        let spawnX, spawnY;
+        const padding = 100; // How far off-screen to spawn
+        switch (edge) {
+            case 0: // Top
+                spawnX = Math.random() * GAME_WIDTH;
+                spawnY = -padding;
+                break;
+            case 1: // Right
+                spawnX = GAME_WIDTH + padding;
+                spawnY = Math.random() * GAME_HEIGHT;
+                break;
+            case 2: // Bottom
+                spawnX = Math.random() * GAME_WIDTH;
+                spawnY = GAME_HEIGHT + padding;
+                break;
+            case 3: // Left
+                spawnX = -padding;
+                spawnY = Math.random() * GAME_HEIGHT;
+                break;
+        }
+        createAsteroid(spawnX, spawnY, 2); // Spawn large asteroid
+        logger.debug('New large asteroid spawned from edge');
+    }
+}, ASTEROID_SPAWN_INTERVAL);
