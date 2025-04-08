@@ -203,6 +203,9 @@ function handleAsteroidHit(asteroidId, hitData) {
     }
 }
 
+// Define the port
+const PORT = process.env.PORT || 3000;
+
 io.on('connection', (socket) => {
     logger.info(`Player connected: ${socket.id}`);
 
@@ -359,47 +362,26 @@ io.on('connection', (socket) => {
     });
 });
 
-// Game loop with error handling
+// Start the server
+http.listen(PORT, () => {
+    logger.info(`Server running on port ${PORT}`);
+    initializeAsteroids(); // Initialize asteroids when server starts
+    logger.info('Initial asteroids spawned');
+});
+
+// Game loop for asteroid updates
 setInterval(() => {
-    try {
-        updateAsteroids();
-        io.emit('gameState', {
-            players: Array.from(players.values()),
-            asteroids: Array.from(asteroids.values())
-        });
-    } catch (error) {
-        logger.error('Error in game loop:', error);
-    }
-}, 1000 / 60);
+    updateAsteroids();
+    io.emit('gameUpdate', {
+        players: Array.from(players.values()),
+        asteroids: Array.from(asteroids.values())
+    });
+}, 1000 / 60); // 60 times per second
 
-// Server startup with error handling
-const startServer = (port) => {
-    try {
-        http.listen(port, () => {
-            logger.info(`Server running on port ${port}`);
-            // Initialize asteroids when server starts
-            initializeAsteroids();
-            logger.info('Initial asteroids spawned');
-        }).on('error', (err) => {
-            if (err.code === 'EADDRINUSE' && port < 3005) {
-                logger.warn(`Port ${port} in use, trying ${port + 1}`);
-                startServer(port + 1);
-            } else {
-                logger.error('Server failed to start:', err);
-            }
-        });
-    } catch (error) {
-        logger.error('Critical error starting server:', error);
-    }
-};
-
-// Spawn new asteroids periodically
+// Periodically spawn new asteroids
 setInterval(() => {
     if (asteroids.size < MAX_ASTEROIDS) {
-        const newAsteroid = createAsteroid();
-        io.emit('newAsteroid', newAsteroid);
+        createAsteroid();
         logger.debug('New asteroid spawned');
     }
-}, ASTEROID_SPAWN_INTERVAL);
-
-startServer(3000); 
+}, ASTEROID_SPAWN_INTERVAL); 
