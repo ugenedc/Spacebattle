@@ -443,9 +443,10 @@ class MainScene extends Phaser.Scene {
             });
 
             socket.on('bulletFired', (bulletInfo) => {
-                if (bulletInfo.playerId !== socket.id) {
+                // Don't add bullets fired by the local player (they are created locally)
+                // if (bulletInfo.playerId !== socket.id) { // This check is redundant if server uses broadcast
                     this.addBullet(bulletInfo);
-                }
+                // }
             });
 
             socket.on('asteroidDestroyed', (asteroidId) => {
@@ -649,34 +650,32 @@ class MainScene extends Phaser.Scene {
     addBullet(bulletInfo) {
         const bullet = this.physics.add.sprite(bulletInfo.x, bulletInfo.y, 'bullet');
         
-        // Calculate bullet spawn position at ship's nose
-        const offset = 20;
-        const spawnX = bulletInfo.x + Math.cos(bulletInfo.rotation - Math.PI/2) * offset;
-        const spawnY = bulletInfo.y + Math.sin(bulletInfo.rotation - Math.PI/2) * offset;
-        bullet.setPosition(spawnX, spawnY);
-        
+        // Set position directly from bulletInfo (already calculated by shooter)
+        bullet.setPosition(bulletInfo.x, bulletInfo.y);
+
         // Set up bullet physics body
         this.physics.world.enable(bullet);
         bullet.body.setCircle(4); // Match the bullet's visual size
         bullet.body.setCollideWorldBounds(false);
         
-        // Set bullet velocity in direction of ship's rotation
+        // Set bullet velocity in direction of bullet's rotation
         const speed = 400;
-        const velocity = this.physics.velocityFromRotation(bulletInfo.rotation - Math.PI/2, speed);
+        // Use the rotation provided in bulletInfo directly
+        const velocity = this.physics.velocityFromRotation(bulletInfo.rotation, speed);
         bullet.setVelocity(velocity.x, velocity.y);
         
-        bullet.ownerId = socket.id;
-        bullet.weaponType = this.weaponType;
+        // Store owner and type for collision logic
+        bullet.ownerId = bulletInfo.playerId; 
+        bullet.weaponType = bulletInfo.weaponType || 'normal';
 
-        socket.emit('playerShoot', {
-            x: spawnX,
-            y: spawnY,
-            rotation: bulletInfo.rotation - Math.PI/2,
-            weaponType: this.weaponType
-        });
+        // Add to group for collisions
+        this.bulletsGroup.add(bullet); 
 
+        // Set bullet lifetime
         this.time.delayedCall(2000, () => {
-            bullet.destroy();
+            if (bullet) { // Check if bullet still exists
+               bullet.destroy();
+            }
         });
 
         return bullet;
@@ -861,32 +860,34 @@ class MainScene extends Phaser.Scene {
     }
 
     shoot() {
-        if (!this.playerShip) return;
+        if (!this.playerShip || !this.playerShip.active) return; // Check if ship exists and is active
 
         // Calculate bullet spawn position at ship's nose
         const offset = 20;
-        const rotation = this.playerShip.rotation;
+        // Use ship's current rotation (already adjusted for direction)
+        const rotation = this.playerShip.rotation; 
         const spawnX = this.playerShip.x + Math.cos(rotation - Math.PI/2) * offset;
         const spawnY = this.playerShip.y + Math.sin(rotation - Math.PI/2) * offset;
 
-        // Create bullet
+        // Create bullet locally
         const bullet = this.physics.add.sprite(spawnX, spawnY, 'bullet');
         this.bulletsGroup.add(bullet);
         
         // Set bullet velocity in direction of ship's rotation
         const speed = 400;
-        const velocity = this.physics.velocityFromRotation(rotation - Math.PI/2, speed);
+        // Use adjusted rotation for velocity to match ship's visual orientation
+        const velocity = this.physics.velocityFromRotation(rotation - Math.PI/2, speed); 
         bullet.setVelocity(velocity.x, velocity.y);
         
         // Set bullet properties
         bullet.ownerId = socket.id;
         bullet.weaponType = this.weaponType;
 
-        // Emit shoot event
+        // Emit shoot event TO SERVER
         socket.emit('playerShoot', {
-            x: spawnX,
+            x: spawnX, // Send the calculated spawn position
             y: spawnY,
-            rotation: rotation,
+            rotation: rotation - Math.PI/2, // Send the bullet's travel angle
             weaponType: this.weaponType
         });
 
@@ -895,7 +896,9 @@ class MainScene extends Phaser.Scene {
 
         // Destroy bullet after 2 seconds
         this.time.delayedCall(2000, () => {
-            bullet.destroy();
+             if (bullet) { // Check if bullet still exists
+               bullet.destroy();
+            }
         });
     }
 

@@ -332,11 +332,13 @@ io.on('connection', (socket) => {
     socket.on('playerShoot', (shootData) => {
         const player = players.get(socket.id);
         if (player && player.isAlive) {
-            io.emit('bulletFired', {
+            // Use socket.broadcast.emit to send to everyone EXCEPT the sender
+            socket.broadcast.emit('bulletFired', {
                 playerId: socket.id,
                 x: shootData.x,
                 y: shootData.y,
-                rotation: shootData.rotation
+                rotation: shootData.rotation,
+                weaponType: shootData.weaponType // Include weaponType
             });
         }
     });
