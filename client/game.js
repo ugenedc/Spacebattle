@@ -502,9 +502,16 @@ class MainScene extends Phaser.Scene {
         try {
             Logger.debug('Setting up socket events');
             
+            // Remove duplicate gameState handler, keep only one
+            socket.off('gameState'); // Remove any existing handlers
             socket.on('gameState', (state) => {
-                Logger.debug(`Received game state with ${state.players.length} players and ${state.asteroids.length} asteroids`);
-                this.handleGameState(state);
+                if (!this.isInitialized) {
+                    Logger.debug('Initial game state received');
+                    this.handleGameState(state);
+                } else {
+                    // Just update positions for existing objects
+                    this.handleGameUpdate(state);
+                }
             });
 
             socket.on('newPlayer', (playerInfo) => {
@@ -773,6 +780,40 @@ class MainScene extends Phaser.Scene {
 
         this.isInitialized = true;
         Logger.debug('Game state initialized');
+    }
+
+    handleGameUpdate(state) {
+        // Update positions without reinitializing everything
+        state.players.forEach(playerInfo => {
+            const player = this.playersMap.get(playerInfo.id);
+            if (player) {
+                if (playerInfo.id !== socket.id) {
+                    // Update other players' positions through interpolation targets
+                    const targetData = this.playerInterpolationTargets.get(playerInfo.id) || {};
+                    targetData.x = playerInfo.x;
+                    targetData.y = playerInfo.y;
+                    targetData.rotation = playerInfo.rotation;
+                    this.playerInterpolationTargets.set(playerInfo.id, targetData);
+                }
+                // Update health for all players
+                if (player.info.health !== playerInfo.health) {
+                    player.info.health = playerInfo.health;
+                    const healthBar = this.healthBars.get(playerInfo.id);
+                    if (healthBar) {
+                        this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
+                    }
+                }
+            }
+        });
+
+        // Update asteroid positions
+        state.asteroids.forEach(asteroidInfo => {
+            const asteroid = this.asteroidsMap.get(asteroidInfo.id);
+            if (asteroid) {
+                asteroid.sprite.setPosition(asteroidInfo.x, asteroidInfo.y);
+                asteroid.sprite.setRotation(asteroidInfo.rotation);
+            }
+        });
     }
 
     addPlayer(playerInfo) {
@@ -1213,152 +1254,102 @@ class MainScene extends Phaser.Scene {
     }
 
     update() {
-        if (!this.isInitialized) { // Don't check playerShip here, needs to run for interpolation
+        if (!this.isInitialized || !this.playerShip || !this.playerShip.active) {
             return;
         }
 
         try {
-            // Interpolate other players' positions for smoother movement
+            // Interpolate other players' positions
             this.playersMap.forEach((player, id) => {
-                if (id !== socket.id && player.sprite.active) { // Don't interpolate self or inactive sprites
+                if (id !== socket.id && player.sprite.active) {
                     const target = this.playerInterpolationTargets.get(id);
-                    const sprite = player.sprite;
                     if (target) {
-                        const lerpFactor = 0.2; // Adjust for more/less smoothing (lower = smoother)
-                        sprite.x = Phaser.Math.Linear(sprite.x, target.x, lerpFactor);
-                        sprite.y = Phaser.Math.Linear(sprite.y, target.y, lerpFactor);
-                        // Interpolate rotation using shortest direction
-                        sprite.rotation = Phaser.Math.Angle.RotateTo(sprite.rotation, target.rotation, lerpFactor * 0.5); // Rotate slightly slower
+                        const lerpFactor = 0.2;
+                        player.sprite.x = Phaser.Math.Linear(player.sprite.x, target.x, lerpFactor);
+                        player.sprite.y = Phaser.Math.Linear(player.sprite.y, target.y, lerpFactor);
+                        player.sprite.rotation = Phaser.Math.Angle.RotateTo(
+                            player.sprite.rotation,
+                            target.rotation,
+                            lerpFactor * 0.5
+                        );
                     }
-                }
 
-                // Update UI elements for all players (including self)
-                const nameText = this.playerTexts.get(id);
-                const healthBar = this.healthBars.get(id);
-                if (player.sprite.active && nameText && healthBar) { // Only if sprite is active
-                    nameText.setPosition(player.sprite.x, player.sprite.y - 30);
-                    this.updateHealthBar(healthBar, player.sprite.x, player.sprite.y - 20, player.info.health);
+                    // Update UI elements
+                    const nameText = this.playerTexts.get(id);
+                    const healthBar = this.healthBars.get(id);
+                    if (nameText && healthBar) {
+                        nameText.setPosition(player.sprite.x, player.sprite.y - 30);
+                        this.updateHealthBar(healthBar, player.sprite.x, player.sprite.y - 20, player.info.health);
+                    }
                 }
             });
 
-            // Handle LOCAL player ship movement to target
-            if (this.playerShip && this.playerShip.active && this.playerShip.body) { // Check if active
-                // Apply speed boost multiplier if active
-                const currentSpeedMultiplier = this.speedBoostActive ? this.speedBoostMultiplier : 1;
-                const maxVelocity = 300 * currentSpeedMultiplier; // Adjust max velocity
-                this.playerShip.body.setMaxVelocity(maxVelocity);
+            // Handle local player movement
+            if (this.target && this.isMoving) {
+                const distance = Phaser.Math.Distance.Between(
+                    this.playerShip.x, this.playerShip.y,
+                    this.target.x, this.target.y
+                );
 
-                if (this.target && this.isMoving) {
-                    // Calculate distance to target
-                    const distance = Phaser.Math.Distance.Between(
-                        this.playerShip.x, this.playerShip.y,
-                        this.target.x, this.target.y
-                    );
+                const targetAngle = Phaser.Math.Angle.Between(
+                    this.playerShip.x, this.playerShip.y,
+                    this.target.x, this.target.y
+                ) + Math.PI/2;
 
-                    // Calculate angle to target (add PI/2 to adjust for ship's default orientation)
-                    const targetAngle = Phaser.Math.Angle.Between(
-                        this.playerShip.x, this.playerShip.y,
-                        this.target.x, this.target.y
-                    ) + Math.PI/2;
+                // Smooth rotation
+                const currentAngle = this.playerShip.rotation;
+                const angleDiff = Phaser.Math.Angle.Wrap(targetAngle - currentAngle);
+                
+                if (Math.abs(angleDiff) > 0.02) {
+                    this.playerShip.rotation += Phaser.Math.Angle.Wrap(angleDiff * 0.1);
+                }
 
-                    // Smooth rotation towards target
-                    const currentAngle = this.playerShip.rotation;
-                    const angleDiff = Phaser.Math.Angle.Wrap(targetAngle - currentAngle);
+                if (distance > this.arrivalThreshold) {
+                    // Calculate velocity based on distance
+                    const speed = Math.min(distance * 2, 300);
+                    const velocity = this.physics.velocityFromRotation(targetAngle - Math.PI/2, speed);
                     
-                    if (Math.abs(angleDiff) > 0.02) {
-                        const rotationSpeed = 0.1;
-                        this.playerShip.rotation += Phaser.Math.Angle.Wrap(angleDiff * rotationSpeed);
-                    }
+                    // Set velocity
+                    this.playerShip.body.setVelocity(velocity.x, velocity.y);
 
-                    if (distance > this.arrivalThreshold) {
-                        // Calculate desired velocity based on distance and boost
-                        let speed = Math.min(distance * 2, maxVelocity) * currentSpeedMultiplier;
-                        // Use targetAngle - PI/2 for velocity to match ship's orientation
-                        const velocity = this.physics.velocityFromRotation(targetAngle - Math.PI / 2, speed);
-
-                        // Set velocity directly
-                        this.playerShip.body.setVelocity(velocity.x, velocity.y);
-
-                        // Update thrust particles position AND ANGLE to match ship's orientation
-                        if (this.thrustParticles) {
-                            const thrustOffset = -15; // Move emitter slightly behind the ship center
-                            const particlePosX = this.playerShip.x + Math.cos(this.playerShip.rotation - Math.PI / 2) * thrustOffset;
-                            const particlePosY = this.playerShip.y + Math.sin(this.playerShip.rotation - Math.PI / 2) * thrustOffset;
-                            this.thrustParticles.setPosition(particlePosX, particlePosY);
-                            
-                            // Make particles emit away from ship's direction
-                            // Angle 0 is right, 90 down, 180 left, 270 up. Ship rotation 0 is up.
-                            // Emitter angle needs to be opposite ship's movement angle.
-                            const emitAngle = Phaser.Math.RadToDeg(this.playerShip.rotation + Math.PI / 2); 
-                            this.thrustParticles.setAngle({ min: emitAngle - 15, max: emitAngle + 15 }); // Emit opposite direction +/- 15 deg
-
-                            if (!this.thrustParticles.emitting) {
-                                this.thrustParticles.start();
-                                // Start sound if not already playing (optional)
-                                // if (!this.sounds.thrust.isPlaying) {
-                                //     this.sounds.thrust.play({ loop: true });
-                                // }
-                            }
-                        }
-                    } else {
-                        // We've arrived at the target
-                        this.playerShip.body.setVelocity(0, 0);
-                        this.isMoving = false;
-
-                        // Stop thrust effects
-                        if (this.thrustParticles && this.thrustParticles.emitting) {
-                            this.thrustParticles.stop();
-                            // Stop looping sound (optional)
-                            // this.sounds.thrust.stop();
-                        }
-
-                        // Remove target indicator
-                        if (this.targetIndicator) {
-                            this.targetIndicator.destroy();
-                            this.targetIndicator = null;
+                    // Update thrust particles
+                    if (this.thrustParticles) {
+                        const thrustOffset = -15;
+                        const particlePosX = this.playerShip.x + Math.cos(this.playerShip.rotation - Math.PI/2) * thrustOffset;
+                        const particlePosY = this.playerShip.y + Math.sin(this.playerShip.rotation - Math.PI/2) * thrustOffset;
+                        this.thrustParticles.setPosition(particlePosX, particlePosY);
+                        
+                        if (!this.thrustParticles.emitting) {
+                            this.thrustParticles.start();
                         }
                     }
-                }
 
-                // Stop thrust if player stops moving for any other reason (e.g., releasing mouse)
-                if (!this.isMoving && this.thrustParticles && this.thrustParticles.emitting) {
-                    this.thrustParticles.stop();
-                    // Stop looping sound (optional)
-                    // this.sounds.thrust.stop();
+                    // Send position update to server
+                    socket.emit('playerUpdate', {
+                        x: this.playerShip.x,
+                        y: this.playerShip.y,
+                        rotation: this.playerShip.rotation,
+                        velocityX: this.playerShip.body.velocity.x,
+                        velocityY: this.playerShip.body.velocity.y
+                    });
+                } else {
+                    // Arrived at target
+                    this.playerShip.body.setVelocity(0, 0);
+                    this.isMoving = false;
+                    if (this.thrustParticles && this.thrustParticles.emitting) {
+                        this.thrustParticles.stop();
+                    }
+                    if (this.targetIndicator) {
+                        this.targetIndicator.destroy();
+                        this.targetIndicator = null;
+                    }
                 }
-
-                // Handle shooting with spacebar
-                if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-                    this.shoot();
-                }
-                
-                // Clamp local player position to game bounds
-                const halfShipWidth = 12; // Match server approx
-                const gameWidth = this.physics.world.bounds.width;
-                const gameHeight = this.physics.world.bounds.height;
-                this.playerShip.x = Phaser.Math.Clamp(this.playerShip.x, halfShipWidth, gameWidth - halfShipWidth);
-                this.playerShip.y = Phaser.Math.Clamp(this.playerShip.y, halfShipWidth, gameHeight - halfShipWidth);
-                
-                // Emit player movement for the local ship
-                socket.emit('playerMovement', {
-                    x: this.playerShip.x,
-                    y: this.playerShip.y,
-                    rotation: this.playerShip.rotation,
-                    velocityX: this.playerShip.body.velocity.x,
-                    velocityY: this.playerShip.body.velocity.y
-                });
             }
 
-            // Update asteroids (REMOVED local rotation, position/rotation set by server gameUpdate)
-            // this.asteroidsMap.forEach((asteroidObj) => {
-            //     const asteroid = asteroidObj.sprite;
-            //     if (asteroid) {
-            //         // Update rotation
-            //         if (asteroid.rotationSpeed) {
-            //             asteroid.rotation += asteroid.rotationSpeed;
-            //         }
-            //     }
-            // });
+            // Handle shooting
+            if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+                this.shoot();
+            }
 
         } catch (error) {
             Logger.error('Error in update loop:', error);
