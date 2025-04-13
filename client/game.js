@@ -435,14 +435,17 @@ class MainScene extends Phaser.Scene {
         });
 
         this.thrustParticles = this.add.particles(0, 0, 'bullet', {
-            speed: 100,
-            scale: { start: 0.2, end: 0 },
+            speed: { min: 50, max: 100 }, // Slower speed for trail
+            angle: { min: 80, max: 100 }, // Angle relative to ship's direction (adjust if needed)
+            scale: { start: 0.25, end: 0 }, // Slightly larger start scale
+            alpha: { start: 0.5, end: 0 }, // Fade out alpha
             blendMode: 'ADD',
-            lifespan: 500,
+            lifespan: 300, // Shorter lifespan for a tighter trail
             gravityY: 0,
-            quantity: 1,
-            emitting: false
+            frequency: 50, // Emit particles more frequently
+            emitting: false // Start non-emitting
         });
+        this.thrustParticles.setDepth(1); // Ensure particles are behind the ship (if ship depth is higher)
     }
 
     setupSounds() {
@@ -828,23 +831,27 @@ class MainScene extends Phaser.Scene {
         asteroid.rotationSpeed = Phaser.Math.FloatBetween(-0.02, 0.02) * (asteroidInfo.size === 2 ? 0.5 : asteroidInfo.size === 1 ? 1 : 1.5);
         
         // Set scale based on size
-        let scaleMultiplier = 1.5; // Increase visual size
+        let scaleMultiplier; // Define scale multiplier based on size
         let scale;
         let physicsRadius;
         switch(asteroidInfo.size) {
             case 2: // Large
+                scaleMultiplier = 2.0; // Increase visual size FURTHER for large asteroids
                 scale = 1 * scaleMultiplier;
-                physicsRadius = 32;
+                physicsRadius = 32; // Keep original physics radius
                 break;
             case 1: // Medium
+                scaleMultiplier = 1.5; // Keep previous increase for medium
                 scale = 0.7 * scaleMultiplier;
                 physicsRadius = 24;
                 break;
             case 0: // Small
+                scaleMultiplier = 1.5; // Keep previous increase for small
                 scale = 0.5 * scaleMultiplier;
                 physicsRadius = 16;
                 break;
             default:
+                scaleMultiplier = 1.5; // Fallback
                 scale = 1 * scaleMultiplier;
                 physicsRadius = 32;
         }
@@ -1240,40 +1247,57 @@ class MainScene extends Phaser.Scene {
                         // Calculate desired velocity based on distance and boost
                         let speed = Math.min(distance * 2, maxVelocity) * currentSpeedMultiplier;
                         // Use targetAngle - PI/2 for velocity to match ship's orientation
-                        const velocity = this.physics.velocityFromRotation(targetAngle - Math.PI/2, speed);
-                        
+                        const velocity = this.physics.velocityFromRotation(targetAngle - Math.PI / 2, speed);
+
                         // Set velocity directly
                         this.playerShip.body.setVelocity(velocity.x, velocity.y);
 
-                        // Update thrust particles position to match ship's orientation
+                        // Update thrust particles position AND ANGLE to match ship's orientation
                         if (this.thrustParticles) {
-                            const thrustOffset = 20;
-                            this.thrustParticles.setPosition(
-                                this.playerShip.x - Math.cos(this.playerShip.rotation - Math.PI/2) * thrustOffset,
-                                this.playerShip.y - Math.sin(this.playerShip.rotation - Math.PI/2) * thrustOffset
-                            );
+                            const thrustOffset = -15; // Move emitter slightly behind the ship center
+                            const particlePosX = this.playerShip.x + Math.cos(this.playerShip.rotation - Math.PI / 2) * thrustOffset;
+                            const particlePosY = this.playerShip.y + Math.sin(this.playerShip.rotation - Math.PI / 2) * thrustOffset;
+                            this.thrustParticles.setPosition(particlePosX, particlePosY);
+                            
+                            // Make particles emit away from ship's direction
+                            // Angle 0 is right, 90 down, 180 left, 270 up. Ship rotation 0 is up.
+                            // Emitter angle needs to be opposite ship's movement angle.
+                            const emitAngle = Phaser.Math.RadToDeg(this.playerShip.rotation + Math.PI / 2); 
+                            this.thrustParticles.setAngle({ min: emitAngle - 15, max: emitAngle + 15 }); // Emit opposite direction +/- 15 deg
+
                             if (!this.thrustParticles.emitting) {
                                 this.thrustParticles.start();
-                                this.sounds.thrust.play();
+                                // Start sound if not already playing (optional)
+                                // if (!this.sounds.thrust.isPlaying) {
+                                //     this.sounds.thrust.play({ loop: true });
+                                // }
                             }
                         }
                     } else {
                         // We've arrived at the target
                         this.playerShip.body.setVelocity(0, 0);
                         this.isMoving = false;
-                        
+
                         // Stop thrust effects
-                        if (this.thrustParticles) {
+                        if (this.thrustParticles && this.thrustParticles.emitting) {
                             this.thrustParticles.stop();
-                            this.sounds.thrust.stop();
+                            // Stop looping sound (optional)
+                            // this.sounds.thrust.stop();
                         }
-                        
+
                         // Remove target indicator
                         if (this.targetIndicator) {
                             this.targetIndicator.destroy();
                             this.targetIndicator = null;
                         }
                     }
+                }
+
+                // Stop thrust if player stops moving for any other reason (e.g., releasing mouse)
+                if (!this.isMoving && this.thrustParticles && this.thrustParticles.emitting) {
+                    this.thrustParticles.stop();
+                    // Stop looping sound (optional)
+                    // this.sounds.thrust.stop();
                 }
 
                 // Handle shooting with spacebar

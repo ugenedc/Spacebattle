@@ -75,26 +75,29 @@ const INACTIVITY_CHECK_INTERVAL = 10000; // Check every 10 seconds
 // Power-up types
 const POWERUP_TYPES = ['health', 'speed']; // Add 'speed' type
 
-// Generate power-ups
-function generatePowerup() {
-    if (powerups.size >= MAX_POWERUPS) return;
+// Generate power-ups (now accepts optional spawn coordinates)
+function generatePowerup(spawnX = null, spawnY = null) {
+    if (powerups.size >= MAX_POWERUPS) return; // Still respect max limit
 
     const powerup = {
         id: powerupId++,
         type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)],
-        x: Math.random() * GAME_WIDTH,
-        y: Math.random() * GAME_HEIGHT
+        x: spawnX !== null ? spawnX : Math.random() * GAME_WIDTH, // Use provided coords or random
+        y: spawnY !== null ? spawnY : Math.random() * GAME_HEIGHT
     };
     powerups.set(powerup.id, powerup);
     io.emit('powerupSpawned', powerup);
+    logger.debug(`Spawned powerup ${powerup.id} (${powerup.type}) at (${powerup.x.toFixed(0)}, ${powerup.y.toFixed(0)})`);
 }
 
-// Spawn power-ups periodically
+// Spawn power-ups periodically - DISABLED, now only from asteroids
+/*
 setInterval(() => {
     if (powerups.size < MAX_POWERUPS) {
         generatePowerup();
     }
 }, POWERUP_SPAWN_INTERVAL);
+*/
 
 function createAsteroid(x, y, size = 2, velocityX = null, velocityY = null) {
     const asteroid = {
@@ -163,14 +166,24 @@ function handleAsteroidHit(asteroidId, hitData) {
     // Get player who shot (if any)
     const player = players.get(hitData.playerId);
 
+    // Store original position and size before deleting
+    const originalX = asteroid.x;
+    const originalY = asteroid.y;
+    const originalSize = asteroid.size;
+
     // Remove the hit asteroid
     asteroids.delete(asteroidId);
     io.emit('asteroidDestroyed', asteroidId);
 
+    // *** Check for powerup spawn on destruction ***
+    if (originalSize === 2 && Math.random() < 0.5) { // 50% chance if it was a Large asteroid
+        generatePowerup(originalX, originalY);
+    }
+
     // Create fragments if it wasn't a small asteroid
-    if (asteroid.size > 0) {
-        const numFragments = asteroid.size === 2 ? 2 : 2; // Large -> 2 Medium, Medium -> 2 Small
-        const newSize = asteroid.size - 1;
+    if (originalSize > 0) {
+        const numFragments = 2; // Always split into 2 smaller pieces
+        const newSize = originalSize - 1;
         
         for (let i = 0; i < numFragments; i++) {
             // Calculate slightly randomized velocity for fragments based on original + bullet impact
@@ -182,8 +195,8 @@ function handleAsteroidHit(asteroidId, hitData) {
             const fragmentSpawnOffset = 10; // Small offset
 
             createAsteroid(
-                asteroid.x + Math.cos(fragmentAngle) * fragmentSpawnOffset, // Apply offset
-                asteroid.y + Math.sin(fragmentAngle) * fragmentSpawnOffset, // Apply offset
+                originalX + Math.cos(fragmentAngle) * fragmentSpawnOffset, // Apply offset
+                originalY + Math.sin(fragmentAngle) * fragmentSpawnOffset, // Apply offset
                 newSize,
                 (asteroid.velocityX * 0.5) + Math.cos(fragmentAngle) * baseSpeed, // Inherit some velocity + fragment burst
                 (asteroid.velocityY * 0.5) + Math.sin(fragmentAngle) * baseSpeed
