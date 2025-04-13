@@ -415,6 +415,26 @@ class MainScene extends Phaser.Scene {
                 // Leaderboard will be updated via gameUpdate
             });
 
+            // Handle shooting logic response
+            socket.on('shootConfirmed', (shootData) => {
+                // ... existing code ...
+            });
+
+            // Handle player damage update
+            socket.on('playerDamaged', (damageInfo) => {
+                this.handlePlayerDamage(damageInfo);
+            });
+
+            // Handle player death
+            socket.on('playerDied', (deathInfo) => {
+                this.handlePlayerDeath(deathInfo);
+            });
+
+            // Handle player respawn
+            socket.on('playerRespawned', (respawnInfo) => {
+                this.handlePlayerRespawn(respawnInfo);
+            });
+
             this.isInitialized = true;
             Logger.info('Scene creation completed successfully');
         } catch (error) {
@@ -1459,6 +1479,96 @@ class MainScene extends Phaser.Scene {
     // Call stopPingMeasurement when scene shuts down or player disconnects
     shutdown() { // Phaser scene lifecycle method
         this.stopPingMeasurement();
+    }
+
+    handlePlayerDamage(damageInfo) {
+        const { id, health } = damageInfo;
+        if (id === this.socket.id && this.playerShip) {
+            // Update local player's health (assuming you have a way to display it)
+            this.playerShip.health = health;
+            console.log(`My health updated: ${health}`);
+            // TODO: Update health bar/UI element
+            if (this.healthBar) { // Example: Assuming healthBar object exists
+                this.healthBar.setValue(health / PLAYER_HEALTH); // Assuming max health is known
+                this.healthBar.setWarning(health < PLAYER_HEALTH * 0.3); // Show warning if low
+            }            
+        } else if (this.otherPlayers.has(id)) {
+            // Update other player's health (if needed visually)
+            const otherPlayer = this.otherPlayers.get(id);
+            otherPlayer.health = health;
+            // Potentially update their health bar if displayed
+        }
+    }
+
+    handlePlayerDeath(deathInfo) {
+        const { id } = deathInfo;
+        if (id === this.socket.id && this.playerShip) {
+            // Local player died
+            console.log("I died!");
+            this.playerShip.setActive(false).setVisible(false); // Hide ship
+            // TODO: Show death message/screen
+            // Maybe show explosion effect?
+            this.triggerExplosion(this.playerShip.x, this.playerShip.y, 'large');
+             // Stop thrust particles if they are emitting
+             if (this.thrustParticles && this.thrustParticles.emitting) {
+                 this.thrustParticles.stop();
+             }
+             this.isMoving = false; // Ensure movement stops
+
+        } else if (this.otherPlayers.has(id)) {
+            // Other player died
+            const otherPlayer = this.otherPlayers.get(id);
+            console.log(`${otherPlayer.playerName || 'Player'} ${id} died.`);
+            this.triggerExplosion(otherPlayer.x, otherPlayer.y, 'large');
+            otherPlayer.setActive(false).setVisible(false);
+            // Remove their name tag or health bar if present
+            if (otherPlayer.nameTag) {
+                otherPlayer.nameTag.destroy();
+                otherPlayer.nameTag = null;
+            }
+        }
+        this.updatePlayerCount(); // Update count potentially
+    }
+
+    handlePlayerRespawn(respawnInfo) {
+        const { id, x, y, health } = respawnInfo;
+        if (id === this.socket.id && this.playerShip) {
+            // Local player respawned
+            console.log("I respawned!");
+            this.playerShip.setPosition(x, y);
+            this.playerShip.setRotation(0); // Reset rotation
+            this.playerShip.body.setVelocity(0, 0); // Reset velocity
+            this.playerShip.health = health;
+            this.playerShip.setActive(true).setVisible(true);
+            // Reset UI elements like health bar
+            if (this.healthBar) { 
+                this.healthBar.setValue(1); 
+                this.healthBar.setWarning(false);
+            }
+        } else if (this.otherPlayers.has(id)) {
+            // Other player respawned - Ensure they exist or create if needed
+            const otherPlayer = this.otherPlayers.get(id);
+            if (otherPlayer) {
+                 console.log(`${otherPlayer.playerName || 'Player'} ${id} respawned.`);
+                otherPlayer.setPosition(x, y);
+                otherPlayer.health = health; // Update health state
+                otherPlayer.setActive(true).setVisible(true);
+                // Re-add name tag if needed
+                if (!otherPlayer.nameTag) {
+                    this.createNameTag(otherPlayer, otherPlayer.playerName || 'Player');
+                }
+            } else {
+                // This case might happen if the player respawns before the client processes their join
+                // Potentially request full player info again or handle gracefully
+                 console.warn(`Received respawn for unknown player ${id}`);
+            }
+        }
+        this.updatePlayerCount();
+    }
+
+    // Function to create/update health bar (Example implementation)
+    createHealthBar() {
+        // ... existing code ...
     }
 }
 

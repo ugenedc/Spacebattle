@@ -66,18 +66,26 @@ let powerupId = 0;
 const PLAYER_HEALTH = 100;
 const RESPAWN_TIME = 3000; // 3 seconds
 const MAX_ASTEROIDS = 50; // Increased significantly from 35
-const MAX_POWERUPS = 3; // Limit to 3 on screen at once
+const MAX_POWERUPS = 5; // << INCREASED from 3 to allow more simultaneous powerups
 const ASTEROID_SPAWN_INTERVAL = 2500; // Decreased further from 3000 (2.5 seconds)
 const POWERUP_SPAWN_INTERVAL = 6000; // Spawn powerups faster (6 seconds)
 const PLAYER_INACTIVITY_TIMEOUT = 30000; // 30 seconds of inactivity
 const INACTIVITY_CHECK_INTERVAL = 10000; // Check every 10 seconds
+const PLAYER_RADIUS = 15; // Approx radius for collision
+const ASTEROID_RADII = { 2: 32, 1: 24, 0: 16 }; // Physics radii by size
+const ASTEROID_DAMAGE = 10; // Damage player takes from hitting an asteroid
 
 // Power-up types
 const POWERUP_TYPES = ['health', 'speed']; // Add 'speed' type
 
 // Generate power-ups (now accepts optional spawn coordinates)
 function generatePowerup(spawnX = null, spawnY = null) {
-    if (powerups.size >= MAX_POWERUPS) return; // Still respect max limit
+    // Add log BEFORE the check
+    logger.debug(`Attempting to generate powerup. Current count: ${powerups.size}, Max: ${MAX_POWERUPS}`);
+    if (powerups.size >= MAX_POWERUPS) {
+        logger.debug('Powerup generation blocked: Maximum count reached.');
+        return; // Still respect max limit
+    }
 
     const powerup = {
         id: powerupId++,
@@ -176,8 +184,13 @@ function handleAsteroidHit(asteroidId, hitData) {
     io.emit('asteroidDestroyed', asteroidId);
 
     // *** Check for powerup spawn on destruction ***
-    if (originalSize === 2 && Math.random() < 0.5) { // 50% chance if it was a Large asteroid
-        generatePowerup(originalX, originalY);
+    if (originalSize === 2) { // Only consider large asteroids
+        if (Math.random() < 0.5) { // 50% chance
+            logger.debug(`Powerup spawn triggered for destroyed large asteroid ${asteroidId}.`);
+            generatePowerup(originalX, originalY);
+        } else {
+            logger.debug(`Powerup spawn chance (50%) failed for destroyed large asteroid ${asteroidId}.`);
+        }
     }
 
     // Create fragments if it wasn't a small asteroid
@@ -203,6 +216,73 @@ function handleAsteroidHit(asteroidId, hitData) {
             );
         }
     }
+}
+
+// Function to handle player death
+function handlePlayerDeath(player) {
+    if (!player || !player.isAlive) return; // Already dead or invalid player
+
+    logger.info(`Player ${player.name} (${player.id}) died.`);
+    player.isAlive = false;
+    player.health = 0;
+    // Reset kills or other stats if needed
+    // player.kills = 0; 
+
+    io.emit('playerDied', { id: player.id });
+
+    // Respawn timer
+    setTimeout(() => {
+        if (players.has(player.id)) { // Check if player still connected
+            player.x = Math.random() * GAME_WIDTH;
+            player.y = Math.random() * GAME_HEIGHT;
+            player.health = PLAYER_HEALTH;
+            player.isAlive = true;
+            player.velocityX = 0;
+            player.velocityY = 0;
+            logger.info(`Player ${player.name} (${player.id}) respawned.`);
+            io.emit('playerRespawned', { 
+                id: player.id, 
+                x: player.x, 
+                y: player.y, 
+                health: player.health 
+            });
+        }
+    }, RESPAWN_TIME);
+}
+
+// Collision detection function
+function checkCollisions() {
+    players.forEach((player) => {
+        if (!player.isAlive) return; // Skip dead players
+
+        asteroids.forEach((asteroid) => {
+            const dx = player.x - asteroid.x;
+            const dy = player.y - asteroid.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const asteroidRadius = ASTEROID_RADII[asteroid.size] || 32; // Use large as default if size is undefined
+
+            if (distance < PLAYER_RADIUS + asteroidRadius) {
+                // Collision detected
+                logger.debug(`Collision detected between player ${player.id} and asteroid ${asteroid.id}`);
+                
+                // Apply damage to player
+                player.health -= ASTEROID_DAMAGE;
+                playerLastUpdateTime.set(player.id, Date.now()); // Update activity time
+                
+                // Emit damage update
+                io.emit('playerDamaged', { id: player.id, health: player.health });
+                logger.debug(`Player ${player.id} health reduced to ${player.health} by asteroid collision`);
+
+                // Check for player death
+                if (player.health <= 0) {
+                    handlePlayerDeath(player);
+                }
+
+                // Optional: Damage/destroy asteroid too?
+                // handleAsteroidHit(asteroid.id, { /* some hit data? */ }); // Could cause chain reactions
+            }
+        });
+    });
 }
 
 // Define the port
@@ -452,20 +532,22 @@ http.listen(PORT, () => {
 
 // Game loop for asteroid updates AND sending game state
 setInterval(() => {
-    updateAsteroids();
+    try {
+        updateAsteroids();
+        checkCollisions(); // << ADDED collision check to game loop
+        // Update player positions based on velocity (if needed, or handled by client updates)
+        // ... any other periodic updates ...
 
-    // Prepare leaderboard data (Top 5 players by kills)
-    const leaderboard = Array.from(players.values())
-        .sort((a, b) => (b.kills || 0) - (a.kills || 0)) // Sort by kills descending
-        .slice(0, 5) // Take top 5
-        .map(p => ({ name: p.name, kills: p.kills || 0 })); // Select only name and kills
-
-    io.emit('gameUpdate', {
-        players: Array.from(players.values()),
-        asteroids: Array.from(asteroids.values()),
-        leaderboard: leaderboard // Include leaderboard in game update
-    });
-}, 1000 / 60); // 60 times per second
+        // Broadcast game state 
+        io.emit('gameState', {
+            players: Array.from(players.values()),
+            asteroids: Array.from(asteroids.values()),
+            powerups: Array.from(powerups.values()) // Include powerups in state
+        });
+    } catch (error) {
+        logger.error('Error in game loop:', error);
+    }
+}, 1000 / 60); // 60 FPS
 
 // Periodically spawn new asteroids (This should also remain)
 setInterval(() => {
