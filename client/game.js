@@ -143,8 +143,11 @@ class MainScene extends Phaser.Scene {
     createAsteroidTexture(variation) {
         const graphics = this.add.graphics();
         
-        // Draw in bright green with thicker lines for visibility
-        graphics.lineStyle(3, 0x00ff00);
+        // Set fill and line styles
+        const fillColor = 0x666666; // Gray fill
+        const lineColor = 0x00ff00; // Green outline
+        graphics.lineStyle(2, lineColor, 0.8); // Thinner line, slightly transparent
+        graphics.fillStyle(fillColor, 1); // Solid fill
         
         // Create different asteroid shapes with properly scaled sizes
         const textureSize = 96;
@@ -164,6 +167,8 @@ class MainScene extends Phaser.Scene {
                 graphics.lineTo(centerX - baseSize * 0.8, centerY + baseSize * 0.8);
                 graphics.lineTo(centerX - baseSize, centerY);
                 graphics.closePath();
+                graphics.fill();
+                graphics.strokePath();
                 break;
             case 1: // Medium asteroid
                 graphics.beginPath();
@@ -173,6 +178,8 @@ class MainScene extends Phaser.Scene {
                 graphics.lineTo(centerX - baseSize * 0.8, centerY + baseSize);
                 graphics.lineTo(centerX - baseSize, centerY - baseSize * 0.5);
                 graphics.closePath();
+                graphics.fill();
+                graphics.strokePath();
                 break;
             case 2: // Small asteroid
                 graphics.beginPath();
@@ -182,10 +189,10 @@ class MainScene extends Phaser.Scene {
                 graphics.lineTo(centerX, centerY + baseSize * 0.6);
                 graphics.lineTo(centerX - baseSize * 0.6, centerY + baseSize * 0.4);
                 graphics.closePath();
+                graphics.fill();
+                graphics.strokePath();
                 break;
         }
-        
-        graphics.strokePath();
         
         // Generate texture
         const textureName = `asteroid${variation}`;
