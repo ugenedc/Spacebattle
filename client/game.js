@@ -225,6 +225,13 @@ class MainScene extends Phaser.Scene {
             // Set background color
             this.cameras.main.setBackgroundColor('#000000');
             
+            // Initialize game object groups FIRST
+            this.bulletsGroup = this.physics.add.group();
+            this.playersGroup = this.physics.add.group();
+            this.asteroidsGroup = this.physics.add.group();
+            this.powerupsGroup = this.physics.add.group();
+            Logger.debug('Game object groups initialized');
+
             // Add the TileSprite background grid
             // Make it larger than the typical screen to cover camera movement
             this.grid = this.add.tileSprite(0, 0, this.game.config.width * 2, this.game.config.height * 2, 'gridTexture');
@@ -241,12 +248,6 @@ class MainScene extends Phaser.Scene {
             this.boundaryRect.strokeRect(0, 0, this.physics.world.bounds.width, this.physics.world.bounds.height);
             this.boundaryRect.setDepth(0); // Try depth 0 (same as default sprites) 
 
-            // Initialize game object groups
-            this.bulletsGroup = this.add.group();
-            this.playersGroup = this.add.group();
-            this.asteroidsGroup = this.add.group();
-            this.powerupsGroup = this.add.group(); // Initialize powerups group
-            
             // Initialize movement target
             this.target = null;
             this.isMoving = false;
@@ -540,30 +541,91 @@ class MainScene extends Phaser.Scene {
                     Logger.error('Received invalid game state');
                     return;
                 }
+
+                // Handle initial game state
+                if (!this.isInitialized) {
+                    this.handleGameState(state);
+                    return;
+                }
                 
+                // Update existing players
                 state.players.forEach(playerInfo => {
                     if (!playerInfo || !playerInfo.id) {
                         Logger.error('Received invalid player info in game state');
                         return;
                     }
-                    // Update other players' positions through interpolation targets
-                    if (playerInfo.id !== socket.id) {
-                        const targetData = this.playerInterpolationTargets.get(playerInfo.id) || {};
-                        targetData.x = playerInfo.x;
-                        targetData.y = playerInfo.y;
-                        targetData.rotation = playerInfo.rotation;
-                        this.playerInterpolationTargets.set(playerInfo.id, targetData);
+
+                    // Add new players that don't exist locally
+                    if (!this.playersMap.has(playerInfo.id)) {
+                        this.addPlayer(playerInfo);
+                        return;
                     }
-                    // Update health for all players
+
+                    // Update existing players
                     const player = this.playersMap.get(playerInfo.id);
-                    if (player && player.info && player.info.health !== playerInfo.health) {
-                        player.info.health = playerInfo.health;
+                    if (player) {
+                        // Update player info
+                        player.info = playerInfo;
+
+                        // Update interpolation targets for other players
+                        if (playerInfo.id !== socket.id) {
+                            const targetData = this.playerInterpolationTargets.get(playerInfo.id) || {};
+                            targetData.x = playerInfo.x;
+                            targetData.y = playerInfo.y;
+                            targetData.rotation = playerInfo.rotation;
+                            this.playerInterpolationTargets.set(playerInfo.id, targetData);
+                        }
+
+                        // Update health bar
                         const healthBar = this.healthBars.get(playerInfo.id);
                         if (healthBar) {
                             this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
                         }
                     }
                 });
+
+                // Remove players that exist locally but not in the state
+                this.playersMap.forEach((playerData, playerId) => {
+                    if (!state.players.find(p => p.id === playerId)) {
+                        if (playerData.sprite) playerData.sprite.destroy();
+                        const nameText = this.playerTexts.get(playerId);
+                        const healthBar = this.healthBars.get(playerId);
+                        if (nameText) nameText.destroy();
+                        if (healthBar) healthBar.destroy();
+                        this.playersMap.delete(playerId);
+                        this.playerTexts.delete(playerId);
+                        this.healthBars.delete(playerId);
+                        this.playerInterpolationTargets.delete(playerId);
+                    }
+                });
+
+                // Update asteroids
+                if (state.asteroids) {
+                    const receivedAsteroidIds = new Set();
+                    state.asteroids.forEach(asteroidInfo => {
+                        receivedAsteroidIds.add(asteroidInfo.id);
+                        const asteroid = this.asteroidsMap.get(asteroidInfo.id);
+                        if (asteroid) {
+                            asteroid.sprite.setPosition(asteroidInfo.x, asteroidInfo.y);
+                            asteroid.sprite.setRotation(asteroidInfo.rotation);
+                        } else {
+                            this.addAsteroid(asteroidInfo);
+                        }
+                    });
+
+                    // Remove asteroids that don't exist in the state
+                    this.asteroidsMap.forEach((asteroidData, asteroidId) => {
+                        if (!receivedAsteroidIds.has(asteroidId)) {
+                            if (asteroidData.sprite) asteroidData.sprite.destroy();
+                            this.asteroidsMap.delete(asteroidId);
+                        }
+                    });
+                }
+
+                // Update leaderboard
+                if (state.leaderboard) {
+                    this.updateLeaderboard(state.leaderboard);
+                }
             });
 
             socket.on('newPlayer', (playerInfo) => {
