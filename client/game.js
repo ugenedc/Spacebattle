@@ -428,8 +428,39 @@ class MainScene extends Phaser.Scene {
             });
 
             // Handle player damage update
-            socket.on('playerDamaged', (damageInfo) => {
-                this.handlePlayerDamage(damageInfo);
+            socket.on('playerDamaged', (data) => {
+                if (!data || !data.playerId) {
+                    Logger.error('Received invalid damage data');
+                    return;
+                }
+                const player = this.playersMap.get(data.playerId);
+                if (player) {
+                    // Update player health
+                    player.info.health = data.health;
+
+                    // Update player position due to knockback (for other players)
+                    if (data.playerId !== socket.id && data.x !== undefined && data.y !== undefined) {
+                        const targetData = this.playerInterpolationTargets.get(data.playerId) || {};
+                        targetData.x = data.x;
+                        targetData.y = data.y;
+                        // Don't update rotation here, just position from knockback
+                        this.playerInterpolationTargets.set(data.playerId, targetData);
+                    } else if (data.playerId === socket.id && data.x !== undefined && data.y !== undefined) {
+                        // If it's the local player, snap position immediately
+                        this.playerShip.setPosition(data.x, data.y);
+                    }
+                    
+                    // Update health bar
+                    const healthBar = this.healthBars.get(data.playerId);
+                    if (healthBar) {
+                        this.updateHealthBar(healthBar, data.x, data.y - 20, data.health);
+                    }
+                    
+                    // If this is the local player being damaged, add screen shake effect
+                    if (data.playerId === socket.id) {
+                        this.cameras.main.shake(100, 0.01);
+                    }
+                }
             });
 
             // Handle player death
@@ -505,13 +536,34 @@ class MainScene extends Phaser.Scene {
             // Remove duplicate gameState handler, keep only one
             socket.off('gameState'); // Remove any existing handlers
             socket.on('gameState', (state) => {
-                if (!this.isInitialized) {
-                    Logger.debug('Initial game state received');
-                    this.handleGameState(state);
-                } else {
-                    // Just update positions for existing objects
-                    this.handleGameUpdate(state);
+                if (!state || !state.players) {
+                    Logger.error('Received invalid game state');
+                    return;
                 }
+                
+                state.players.forEach(playerInfo => {
+                    if (!playerInfo || !playerInfo.id) {
+                        Logger.error('Received invalid player info in game state');
+                        return;
+                    }
+                    // Update other players' positions through interpolation targets
+                    if (playerInfo.id !== socket.id) {
+                        const targetData = this.playerInterpolationTargets.get(playerInfo.id) || {};
+                        targetData.x = playerInfo.x;
+                        targetData.y = playerInfo.y;
+                        targetData.rotation = playerInfo.rotation;
+                        this.playerInterpolationTargets.set(playerInfo.id, targetData);
+                    }
+                    // Update health for all players
+                    const player = this.playersMap.get(playerInfo.id);
+                    if (player && player.info && player.info.health !== playerInfo.health) {
+                        player.info.health = playerInfo.health;
+                        const healthBar = this.healthBars.get(playerInfo.id);
+                        if (healthBar) {
+                            this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
+                        }
+                    }
+                });
             });
 
             socket.on('newPlayer', (playerInfo) => {
@@ -520,19 +572,17 @@ class MainScene extends Phaser.Scene {
             });
 
             socket.on('playerMoved', (playerInfo) => {
+                if (!playerInfo || !playerInfo.id) {
+                    Logger.error('Received invalid player movement data');
+                    return;
+                }
                 // Only update OTHER players based on this event
-                if (playerInfo.id !== socket.id) { 
+                if (playerInfo.id !== socket.id) {
                     const targetData = this.playerInterpolationTargets.get(playerInfo.id) || {};
                     targetData.x = playerInfo.x;
                     targetData.y = playerInfo.y;
                     targetData.rotation = playerInfo.rotation;
                     this.playerInterpolationTargets.set(playerInfo.id, targetData);
-                    // Don't set position directly here anymore
-                    // const player = this.playersMap.get(playerInfo.id);
-                    // if (player) {
-                    //     player.sprite.setPosition(playerInfo.x, playerInfo.y);
-                    //     player.sprite.setRotation(playerInfo.rotation);
-                    // }
                 }
             });
 
@@ -556,38 +606,11 @@ class MainScene extends Phaser.Scene {
                 }
             });
 
-            socket.on('playerDamaged', (data) => {
-                const player = this.playersMap.get(data.playerId);
-                if (player) {
-                    // Update player health
-                    player.info.health = data.health;
-
-                    // Update player position due to knockback (for other players)
-                    if (data.playerId !== socket.id && data.x !== undefined && data.y !== undefined) {
-                        const targetData = this.playerInterpolationTargets.get(data.playerId) || {};
-                        targetData.x = data.x;
-                        targetData.y = data.y;
-                        // Don't update rotation here, just position from knockback
-                        this.playerInterpolationTargets.set(data.playerId, targetData);
-                    } else if (data.playerId === socket.id && data.x !== undefined && data.y !== undefined) {
-                        // If it's the local player, snap position immediately
-                        this.playerShip.setPosition(data.x, data.y);
-                    }
-                    
-                    // Update health bar
-                    const healthBar = this.healthBars.get(data.playerId);
-                    if (healthBar) {
-                        this.updateHealthBar(healthBar, data.x, data.y - 20, data.health);
-                    }
-                    
-                    // If this is the local player being damaged, add screen shake effect
-                    if (data.playerId === socket.id) {
-                        this.cameras.main.shake(100, 0.01);
-                    }
-                }
-            });
-
             socket.on('playerKilled', (data) => {
+                if (!data || !data.playerId) {
+                    Logger.error('Received invalid kill data');
+                    return;
+                }
                 const player = this.playersMap.get(data.playerId);
                 if (player) {
                     // Create a large, white explosion effect for player death
@@ -613,8 +636,12 @@ class MainScene extends Phaser.Scene {
             });
 
             socket.on('playerRespawned', (playerInfo) => {
+                if (!playerInfo || !playerInfo.id) {
+                    Logger.error('Received invalid respawn data');
+                    return;
+                }
                 const player = this.playersMap.get(playerInfo.id);
-                 // Clear any old interpolation target on respawn
+                // Clear any old interpolation target on respawn
                 this.playerInterpolationTargets.delete(playerInfo.id); 
                 if (player) {
                     // Reactivate/show the sprite and update position/state
@@ -639,18 +666,22 @@ class MainScene extends Phaser.Scene {
                     const healthBar = this.add.graphics();
                     this.updateHealthBar(healthBar, playerInfo.x, playerInfo.y - 20, playerInfo.health);
                     this.healthBars.set(playerInfo.id, healthBar);
-
                 } 
             });
 
             socket.on('bulletFired', (bulletInfo) => {
-                // Don't add bullets fired by the local player (they are created locally)
-                // if (bulletInfo.playerId !== socket.id) { // This check is redundant if server uses broadcast
-                    this.addBullet(bulletInfo);
-                // }
+                if (!bulletInfo) {
+                    Logger.error('Received invalid bullet data');
+                    return;
+                }
+                this.addBullet(bulletInfo);
             });
 
             socket.on('asteroidDestroyed', (asteroidId) => {
+                if (!asteroidId) {
+                    Logger.error('Received invalid asteroid ID');
+                    return;
+                }
                 const asteroid = this.asteroidsMap.get(asteroidId);
                 if (asteroid) {
                     asteroid.sprite.destroy();
@@ -659,9 +690,17 @@ class MainScene extends Phaser.Scene {
             });
 
             socket.on('gameUpdate', (state) => {
+                if (!state || !state.players) {
+                    Logger.error('Received invalid game update state');
+                    return;
+                }
                 const receivedAsteroidIds = new Set(); // Keep track of asteroids received in this update
 
                 state.players.forEach(playerInfo => {
+                    if (!playerInfo || !playerInfo.id) {
+                        Logger.error('Received invalid player info in game update');
+                        return;
+                    }
                     // Store interpolation targets for OTHER players
                     // Always update health for all (including self)
                     if (playerInfo.id !== socket.id) {
@@ -670,9 +709,6 @@ class MainScene extends Phaser.Scene {
                         targetData.y = playerInfo.y;
                         targetData.rotation = playerInfo.rotation;
                         this.playerInterpolationTargets.set(playerInfo.id, targetData);
-                        // Don't set position directly here anymore
-                        // const player = this.playersMap.get(playerInfo.id);
-                        // if (player) { ... }
                     } 
                     
                     // Update health if it has changed (for self and others)
@@ -714,6 +750,21 @@ class MainScene extends Phaser.Scene {
                 // Update Leaderboard with data from gameUpdate
                 if (state.leaderboard) {
                     this.updateLeaderboard(state.leaderboard);
+                }
+            });
+
+            socket.on('playerHealthUpdate', (data) => {
+                if (!data || !data.id) {
+                    Logger.error('Received invalid health update data');
+                    return;
+                }
+                const player = this.playersMap.get(data.id);
+                if (player && player.info) {
+                    player.info.health = data.health;
+                    const healthBar = this.healthBars.get(data.id);
+                    if (healthBar) {
+                        this.updateHealthBar(healthBar, data.x || player.sprite.x, data.y || player.sprite.y - 20, data.health);
+                    }
                 }
             });
 
@@ -1325,13 +1376,15 @@ class MainScene extends Phaser.Scene {
                     }
 
                     // Send position update to server
-                    socket.emit('playerUpdate', {
-                        x: this.playerShip.x,
-                        y: this.playerShip.y,
-                        rotation: this.playerShip.rotation,
-                        velocityX: this.playerShip.body.velocity.x,
-                        velocityY: this.playerShip.body.velocity.y
-                    });
+                    if (this.playerShip && this.playerShip.active) {
+                        socket.emit('playerUpdate', {
+                            x: this.playerShip.x,
+                            y: this.playerShip.y,
+                            rotation: this.playerShip.rotation,
+                            velocityX: this.playerShip.body.velocity.x,
+                            velocityY: this.playerShip.body.velocity.y
+                        });
+                    }
                 } else {
                     // Arrived at target
                     this.playerShip.body.setVelocity(0, 0);
@@ -1477,25 +1530,6 @@ class MainScene extends Phaser.Scene {
     // Call stopPingMeasurement when scene shuts down or player disconnects
     shutdown() { // Phaser scene lifecycle method
         this.stopPingMeasurement();
-    }
-
-    handlePlayerDamage(damageInfo) {
-        const { id, health } = damageInfo;
-        if (id === this.socket.id && this.playerShip) {
-            // Update local player's health (assuming you have a way to display it)
-            this.playerShip.health = health;
-            console.log(`My health updated: ${health}`);
-            // TODO: Update health bar/UI element
-            if (this.healthBar) { // Example: Assuming healthBar object exists
-                this.healthBar.setValue(health / PLAYER_HEALTH); // Assuming max health is known
-                this.healthBar.setWarning(health < PLAYER_HEALTH * 0.3); // Show warning if low
-            }            
-        } else if (this.otherPlayers.has(id)) {
-            // Update other player's health (if needed visually)
-            const otherPlayer = this.otherPlayers.get(id);
-            otherPlayer.health = health;
-            // Potentially update their health bar if displayed
-        }
     }
 
     handlePlayerDeath(deathInfo) {
